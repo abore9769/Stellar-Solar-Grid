@@ -4,9 +4,11 @@ import { useEffect, useState, useCallback, useMemo } from "react";
 import Link from "next/link";
 import Navbar from "@/components/Navbar";
 import UsageChart, { type UsageDataPoint } from "@/components/UsageChart";
+import { SkeletonCard } from "@/components/SkeletonCard";
 import { useWalletStore } from "@/store/walletStore";
 import { getMeter, getMetersByOwner, type MeterData } from "@/services/meterService";
 import { parseWalletError } from "@/lib/errors";
+import { useToast } from "@/components/ToastProvider";
 
 const STROOPS_PER_XLM = 10_000_000n;
 
@@ -43,6 +45,36 @@ function PlanBadge({ plan }: { plan: string }) {
     <span className={`rounded-full border px-2.5 py-0.5 text-xs font-medium ${cls}`}>
       {plan}
     </span>
+  );
+}
+
+function ErrorCard({ meterId, error }: { meterId: string; error: string }) {
+  return (
+    <div className="rounded-xl border border-red-500/40 bg-red-900/20 p-5 space-y-4">
+      {/* Header */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="font-mono text-sm text-red-400 font-semibold">{meterId}</span>
+        <span className="inline-flex items-center gap-1.5 rounded-full border border-red-600/40 bg-red-900/30 px-3 py-1 text-xs font-semibold text-red-400">
+          <span className="h-1.5 w-1.5 rounded-full bg-red-400" />
+          Error
+        </span>
+      </div>
+
+      {/* Error message */}
+      <div className="rounded-lg border border-red-600/40 bg-red-900/20 p-3 text-red-300 text-sm">
+        <p>Failed to load meter data: {error}</p>
+      </div>
+
+      {/* Actions */}
+      <div className="flex gap-2 pt-1">
+        <button
+          onClick={() => window.location.reload()} // Simple retry, or could call fetchAll for specific meter
+          className="rounded-lg bg-red-600 px-4 py-2 text-xs font-semibold text-white hover:bg-red-700 transition"
+        >
+          Retry
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -148,6 +180,7 @@ export default function UserDashboardPage() {
 
   const [meterIds, setMeterIds] = useState<string[]>([]);
   const [meters, setMeters] = useState<Record<string, MeterData>>({});
+  const [failedMeters, setFailedMeters] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
@@ -161,8 +194,27 @@ export default function UserDashboardPage() {
     try {
       const ids = await getMetersByOwner(address);
       setMeterIds(ids);
-      const entries = await Promise.all(ids.map((id) => getMeter(id).then((m) => [id, m] as const)));
-      setMeters(Object.fromEntries(entries));
+      const metersMap: Record<string, MeterData> = {};
+      const failedMap: Record<string, string> = {};
+      for (const id of ids) {
+        try {
+          const meter = await getMeter(id);
+          metersMap[id] = meter;
+        } catch (err: unknown) {
+          const friendly = parseWalletError(err);
+          failedMap[id] = friendly;
+          showToast({
+            variant: "error",
+            title: `Failed to load meter ${id}`,
+            description: friendly,
+          });
+        }
+      }
+      setMeters(metersMap);
+      setFailedMeters(failedMap);
+      if (Object.keys(failedMap).length > 0) {
+        setError(`Some meters failed to load. Check individual meter cards for details.`);
+      }
       setLastRefresh(new Date());
     } catch (err: unknown) {
       const friendly = parseWalletError(err);
@@ -181,6 +233,7 @@ export default function UserDashboardPage() {
     if (!address) {
       setMeterIds([]);
       setMeters({});
+      setFailedMeters({});
       setError(null);
       setLastRefresh(null);
       return;
@@ -262,6 +315,8 @@ export default function UserDashboardPage() {
             {meterIds.map((id) =>
               meters[id] ? (
                 <MeterCard key={id} meterId={id} meter={meters[id]} />
+              ) : failedMeters[id] ? (
+                <ErrorCard key={id} meterId={id} error={failedMeters[id]} />
               ) : (
                 <SkeletonCard key={id} height={160} />
               )
