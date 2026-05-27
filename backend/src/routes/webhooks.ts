@@ -87,7 +87,7 @@ webhookRouter.post(
     // For now, store in environment variable (in production, use a database)
     process.env.PROVIDER_WEBHOOK_URL = webhook_url;
 
-    logger.info({ webhook_url }, "Low-balance webhook registered");
+    logger.info("Low-balance webhook registered", { webhook_url });
 
     return res.status(200).json({
       message: "Webhook registered successfully",

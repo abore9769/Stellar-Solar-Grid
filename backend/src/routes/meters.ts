@@ -5,6 +5,8 @@ import {
   getUsageHistory,
   persistAndSubmitUsageEvent,
 } from "../lib/usageEvents.js";
+import { asyncHandler } from "../lib/asyncHandler.js";
+import { validateRequest, RegisterMeterSchema } from "../lib/validation.js";
 
 export const meterRouter = Router();
 
@@ -33,7 +35,10 @@ meterRouter.get(
 /** GET /api/meters/:id/history — paginated local usage history */
 meterRouter.get("/:id/history", (req, res) => {
   const page = Math.max(1, Number(req.query.page ?? 1) || 1);
-  const pageSize = Math.min(100, Math.max(1, Number(req.query.pageSize ?? 25) || 25));
+  const pageSize = Math.min(
+    100,
+    Math.max(1, Number(req.query.pageSize ?? 25) || 25),
+  );
 
   try {
     const history = getUsageHistory(req.params.id, page, pageSize);
@@ -79,11 +84,13 @@ meterRouter.post("/:id/usage", async (req, res) => {
   }
 
   const unitsNum = Number(units);
-  const costNum  = Number(cost);
+  const costNum = Number(cost);
 
   // Must be finite numbers
   if (!Number.isFinite(unitsNum) || !Number.isFinite(costNum)) {
-    return res.status(400).json({ error: "units and cost must be valid numbers" });
+    return res
+      .status(400)
+      .json({ error: "units and cost must be valid numbers" });
   }
 
   // Must be integers
