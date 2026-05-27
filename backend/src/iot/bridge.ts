@@ -12,8 +12,14 @@ import mqtt from "mqtt";
 import { logger } from "../lib/logger.js";
 import { persistAndSubmitUsageEvent } from "../lib/usageEvents.js";
 import { UsageUpdateSchema } from "../lib/validation.js";
-import { adminInvoke, contractQuery } from "../lib/stellar.js";
+import {
+  adminInvoke,
+  contractQuery,
+  server,
+  CONTRACT_ID,
+} from "../lib/stellar.js";
 import * as StellarSdk from "@stellar/stellar-sdk";
+import { mqttMessages } from "../lib/metrics.js";
 
 const BROKER = process.env.MQTT_BROKER ?? "mqtt://localhost:1883";
 const TOPIC = "solargrid/meters/+/usage";
@@ -60,7 +66,7 @@ async function checkAndNotifyLowBalance(meterId: string) {
           timestamp: new Date().toISOString(),
         }),
       });
-      logger.info({ meterId, balance }, "Low balance webhook fired");
+      logger.info("Low balance webhook fired", { meterId, balance });
     }
   } catch (err) {
     logger.error("Low balance webhook failed", { meterId, err });
@@ -112,7 +118,7 @@ function startMqttBridge() {
     });
   });
 
-  client.on("message", (topic, payload) => {
+  client.on("message", async (topic, payload) => {
     mqttMessages.inc();
     try {
       const meterId = topic.split("/")[2];
