@@ -34,7 +34,9 @@ jobs:
           node-version: 20
       - run: cd backend && npm ci
       - run: cd backend && npm run build
-      - run: cd backend && npm run test:e2e
+      - name: Run e2e tests (only when secrets are available)
+        if: ${{ secrets.CONTRACT_ID != '' && secrets.ADMIN_SECRET_KEY != '' }}
+        run: cd backend && npm run test:e2e
         env:
           STELLAR_NETWORK: testnet
           CONTRACT_ID: ${{ secrets.CONTRACT_ID }}
