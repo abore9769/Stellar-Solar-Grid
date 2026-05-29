@@ -64,10 +64,17 @@ export async function adminInvoke(
   tx = StellarSdk.SorobanRpc.assembleTransaction(tx, sim).build();
   tx.sign(adminKeypair);
 
-  const sendResult = await server.sendTransaction(tx);
-  if (sendResult.status === "ERROR") {
-    contractCalls.inc({ method, status: "error" });
-    throw new Error(`Transaction submission failed: ${sendResult.errorResult}`);
+  constructor(config: {
+    rpcUrl: string;
+    adminSecret: string;
+    contractId: string;
+    network: string;
+  }) {
+    this.server = new StellarSdk.SorobanRpc.Server(config.rpcUrl);
+    // Load keypair once. The raw secret string is not referenced after this.
+    this.adminKeypair = StellarSdk.Keypair.fromSecret(config.adminSecret);
+    this.contractId = config.contractId;
+    this.networkPassphrase = config.network;
   }
 
   const hash = sendResult.hash;
@@ -81,25 +88,24 @@ export async function adminInvoke(
   }
 }
 
-/** Read-only simulation. */
-export async function contractQuery(
-  method: string,
-  args: StellarSdk.xdr.ScVal[]
-): Promise<StellarSdk.xdr.ScVal> {
-  const account = await server.getAccount(adminKeypair.publicKey());
-  const contract = new StellarSdk.Contract(CONTRACT_ID);
-
-  const tx = new StellarSdk.TransactionBuilder(account, {
-    fee: "100",
-    networkPassphrase: NETWORK_PASSPHRASE,
-  })
-    .addOperation(contract.call(method, ...args))
-    .setTimeout(30)
-    .build();
-
-  const sim = await server.simulateTransaction(tx);
-  if (StellarSdk.SorobanRpc.Api.isSimulationError(sim)) {
-    throw new Error(sim.error);
+    const sim = await this.server.simulateTransaction(tx);
+    if (StellarSdk.SorobanRpc.Api.isSimulationError(sim)) {
+      throw new Error(sim.error);
+    }
+    return (sim as any).result?.retval;
   }
-  return (sim as any).result?.retval;
 }
+
+// Singleton instance — created once at startup and injected into routes.
+export const stellarService = new StellarService({
+  rpcUrl: RPC_URL,
+  adminSecret: process.env.ADMIN_SECRET_KEY!,
+  contractId: process.env.CONTRACT_ID!,
+  network: NETWORK_PASSPHRASE,
+});
+
+// Back-compat aliases so existing callers (bridge, payments) keep working.
+export const CONTRACT_ID = stellarService.contractId;
+export const server = stellarService.server;
+export const adminInvoke = stellarService.invoke.bind(stellarService);
+export const contractQuery = stellarService.query.bind(stellarService);

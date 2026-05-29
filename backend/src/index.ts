@@ -1,7 +1,8 @@
 import "dotenv/config";
 import express from "express";
 import { NextFunction, Request, Response } from "express";
-import { meterRouter } from "./routes/meters.js";
+import { stellarService } from "./lib/stellar.js";
+import { createMeterRouter } from "./routes/meters.js";
 import { paymentsRouter } from "./routes/payments.js";
 import { webhookRouter } from "./routes/webhooks.js";
 import { startIoTBridge } from "./iot/bridge.js";
@@ -33,7 +34,7 @@ app.use((req, _res, next) => {
   next();
 });
 
-app.use("/api/meters", meterRouter);
+app.use("/api/meters", createMeterRouter(stellarService));
 app.use("/api/payments", paymentsRouter);
 app.use("/api/webhooks", webhookRouter);
 
