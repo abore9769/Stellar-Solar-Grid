@@ -10,6 +10,29 @@ import { validateRequest, RegisterMeterSchema } from "../lib/validation.js";
 
 export const meterRouter = Router();
 
+/** GET /api/meters/export?format=csv|json — download all meter data */
+meterRouter.get(
+  "/export",
+  asyncHandler(async (req, res) => {
+    const format = req.query.format === "json" ? "json" : "csv";
+    const result = await contractQuery("get_all_meters", []);
+    const meters = (StellarSdk.scValToNative(result) as any[]) ?? [];
+
+    if (format === "json") {
+      res.setHeader("Content-Disposition", "attachment; filename=meters.json");
+      return res.json(meters);
+    }
+
+    const header = "owner,active,units_used,plan,last_payment,expires_at,daily_limit";
+    const rows = meters.map((m: any) =>
+      [m.owner, m.active, m.units_used, m.plan, m.last_payment, m.expires_at, m.daily_limit].join(",")
+    );
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader("Content-Disposition", "attachment; filename=meters.csv");
+    return res.send([header, ...rows].join("\n"));
+  }),
+);
+
 /** GET /api/meters/:id — get meter status */
 meterRouter.get(
   "/:id",
