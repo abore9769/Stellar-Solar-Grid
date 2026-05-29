@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback } from "react";
 import Navbar from "@/components/Navbar";
+import { Skeleton } from "@/components/Skeleton";
 import { useToast } from "@/components/ToastProvider";
 import { getAllMeters, type MeterData } from "@/services/meterService";
 import { parseWalletError } from "@/lib/errors";
@@ -191,10 +192,22 @@ export default function ProviderDashboardPage() {
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/5">
-                  {meters.length === 0 ? (
+                  {fetching && meters.length === 0 ? (
+                    <>
+                      {[1, 2, 3].map((i) => (
+                        <tr key={i}>
+                          <td className="px-6 py-4"><Skeleton width="140px" height={14} /></td>
+                          <td className="px-6 py-4"><Skeleton width="60px" height={18} /></td>
+                          <td className="px-6 py-4"><Skeleton width="70px" height={14} /></td>
+                          <td className="px-6 py-4"><Skeleton width="50px" height={14} /></td>
+                          <td className="px-6 py-4"><Skeleton width="80px" height={14} /></td>
+                        </tr>
+                      ))}
+                    </>
+                  ) : meters.length === 0 ? (
                     <tr>
                       <td colSpan={5} className="px-6 py-12 text-center text-gray-500">
-                        {fetching ? "Loading meters..." : "No meters found."}
+                        No meters found.
                       </td>
                     </tr>
                   ) : (

@@ -5,6 +5,7 @@ import Link from "next/link";
 import Navbar from "@/components/Navbar";
 import UsageChart, { type UsageDataPoint } from "@/components/UsageChart";
 import { SkeletonCard } from "@/components/SkeletonCard";
+import { Skeleton } from "@/components/Skeleton";
 import { useWalletStore } from "@/store/walletStore";
 import { getMeter, getMetersByOwner, type MeterData } from "@/services/meterService";
 import { parseWalletError } from "@/lib/errors";
@@ -297,7 +298,21 @@ export default function UserDashboardPage() {
         {address && loading && meterIds.length === 0 && (
           <div className="space-y-4">
             {[0, 1].map((i) => (
-              <SkeletonCard key={i} height={160} />
+              <div key={i} className="rounded-xl border border-white/10 bg-solar-accent p-5 space-y-4">
+                <div className="flex items-center justify-between gap-2">
+                  <Skeleton width="30%" height={16} />
+                  <Skeleton width="20%" height={24} />
+                </div>
+                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                  {[1, 2, 3, 4].map((j) => (
+                    <div key={j} className="flex flex-col gap-1">
+                      <Skeleton width="60%" height={10} />
+                      <Skeleton height={16} />
+                    </div>
+                  ))}
+                </div>
+                <Skeleton height={40} />
+              </div>
             ))}
           </div>
         )}

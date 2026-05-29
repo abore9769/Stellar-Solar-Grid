@@ -12,11 +12,57 @@ export const RPC_URL =
     ? "https://soroban-rpc.stellar.org"
     : "https://soroban-testnet.stellar.org";
 
-export class StellarService {
-  readonly server: StellarSdk.SorobanRpc.Server;
-  readonly contractId: string;
-  private readonly networkPassphrase: string;
-  private readonly adminKeypair: StellarSdk.Keypair;
+export const CONTRACT_ID = process.env.CONTRACT_ID!;
+export const server = new StellarSdk.SorobanRpc.Server(RPC_URL);
+
+// Load keypair once at module init. The raw secret string is never referenced again.
+const adminKeypair = StellarSdk.Keypair.fromSecret(process.env.ADMIN_SECRET_KEY!);
+
+/**
+ * Poll until a submitted transaction reaches SUCCESS or FAILED.
+ * Throws a descriptive error on FAILED status or when maxAttempts is exhausted.
+ */
+export async function waitForConfirmation(
+  hash: string,
+  maxAttempts = 10,
+  pollIntervalMs = 2_000
+): Promise<void> {
+  for (let i = 0; i < maxAttempts; i++) {
+    const status = await server.getTransaction(hash);
+    if (status.status === StellarSdk.SorobanRpc.Api.GetTransactionStatus.SUCCESS) return;
+    if (status.status === StellarSdk.SorobanRpc.Api.GetTransactionStatus.FAILED) {
+      throw new Error(`Transaction failed: ${hash}`);
+    }
+    await new Promise((r) => setTimeout(r, pollIntervalMs));
+  }
+  throw new Error(`Transaction timed out: ${hash}`);
+}
+
+/** Submit a signed contract invocation from the admin keypair. */
+export async function adminInvoke(
+  method: string,
+  args: StellarSdk.xdr.ScVal[],
+  maxAttempts = Number(process.env.TX_MAX_ATTEMPTS ?? 15),
+  pollIntervalMs = Number(process.env.TX_POLL_INTERVAL_MS ?? 2_000)
+): Promise<string> {
+  const account = await server.getAccount(adminKeypair.publicKey());
+  const contract = new StellarSdk.Contract(CONTRACT_ID);
+
+  let tx = new StellarSdk.TransactionBuilder(account, {
+    fee: "100",
+    networkPassphrase: NETWORK_PASSPHRASE,
+  })
+    .addOperation(contract.call(method, ...args))
+    .setTimeout(30)
+    .build();
+
+  const sim = await server.simulateTransaction(tx);
+  if (StellarSdk.SorobanRpc.Api.isSimulationError(sim)) {
+    throw new Error(sim.error);
+  }
+
+  tx = StellarSdk.SorobanRpc.assembleTransaction(tx, sim).build();
+  tx.sign(adminKeypair);
 
   constructor(config: {
     rpcUrl: string;
@@ -31,69 +77,16 @@ export class StellarService {
     this.networkPassphrase = config.network;
   }
 
-  /** Submit a signed contract invocation from the admin keypair. */
-  async invoke(method: string, args: StellarSdk.xdr.ScVal[]): Promise<string> {
-    const account = await this.server.getAccount(this.adminKeypair.publicKey());
-    const contract = new StellarSdk.Contract(this.contractId);
-
-    let tx = new StellarSdk.TransactionBuilder(account, {
-      fee: "100",
-      networkPassphrase: this.networkPassphrase,
-    })
-      .addOperation(contract.call(method, ...args))
-      .setTimeout(30)
-      .build();
-
-    const sim = await this.server.simulateTransaction(tx);
-    if (StellarSdk.SorobanRpc.Api.isSimulationError(sim)) {
-      throw new Error(sim.error);
-    }
-
-    tx = StellarSdk.SorobanRpc.assembleTransaction(tx, sim).build();
-    tx.sign(this.adminKeypair);
-
-    const sendResult = await this.server.sendTransaction(tx);
-    if (sendResult.status === "ERROR") {
-      contractCalls.inc({ method, status: "error" });
-      throw new Error(`Transaction submission failed: ${sendResult.errorResult}`);
-    }
-
-    const hash = sendResult.hash;
-    const timeoutMs = Number(process.env.TX_TIMEOUT_MS ?? 30_000);
-    const deadline = Date.now() + timeoutMs;
-
-    while (Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, 1_500));
-      const status = await this.server.getTransaction(hash);
-      if (status.status === StellarSdk.SorobanRpc.Api.GetTransactionStatus.SUCCESS) {
-        contractCalls.inc({ method, status: "success" });
-        return hash;
-      }
-      if (status.status === StellarSdk.SorobanRpc.Api.GetTransactionStatus.FAILED) {
-        contractCalls.inc({ method, status: "error" });
-        throw new Error(`Transaction ${hash} failed on-chain`);
-      }
-    }
-
-    contractCalls.inc({ method, status: "timeout" });
-    throw new Error(`Transaction ${hash} not confirmed within ${timeoutMs}ms`);
+  const hash = sendResult.hash;
+  try {
+    await waitForConfirmation(hash, maxAttempts, pollIntervalMs);
+    contractCalls.inc({ method, status: "success" });
+    return hash;
+  } catch (err) {
+    contractCalls.inc({ method, status: "error" });
+    throw err;
   }
-
-  /** Read-only simulation. */
-  async query(
-    method: string,
-    args: StellarSdk.xdr.ScVal[]
-  ): Promise<StellarSdk.xdr.ScVal> {
-    const account = await this.server.getAccount(this.adminKeypair.publicKey());
-    const contract = new StellarSdk.Contract(this.contractId);
-
-    const tx = new StellarSdk.TransactionBuilder(account, {
-      fee: "100",
-      networkPassphrase: this.networkPassphrase,
-    })
-      .addOperation(contract.call(method, ...args))
-      .setTimeout(30)
-      .build();
+}
 
     const sim = await this.server.simulateTransaction(tx);
     if (StellarSdk.SorobanRpc.Api.isSimulationError(sim)) {

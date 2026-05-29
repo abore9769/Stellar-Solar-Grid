@@ -1,7 +1,14 @@
 "use client";
 
 import { create } from "zustand";
-import { StellarWalletsKit, WalletNetwork, FREIGHTER_ID } from "@creit.tech/stellar-wallets-kit";
+import {
+  StellarWalletsKit,
+  WalletNetwork,
+  FREIGHTER_ID,
+  FreighterModule,
+  xBullWalletId,
+  xBullModule,
+} from "@creit.tech/stellar-wallets-kit";
 
 interface WalletState {
   address: string | null;
@@ -20,7 +27,7 @@ function buildKit(): StellarWalletsKit {
         ? WalletNetwork.TESTNET
         : WalletNetwork.PUBLIC,
     selectedWalletId: FREIGHTER_ID,
-    modules: [],
+    modules: [new FreighterModule(), new xBullModule()],
   });
 }
 
@@ -37,7 +44,7 @@ export const useWalletStore = create<WalletState>((set, get) => ({
         onWalletSelected: async (option) => {
           kit.setWallet(option.id);
           const { address } = await kit.getAddress();
-          if (!address || address.length < 10) throw new Error("No account found in Freighter");
+          if (!address || address.length < 10) throw new Error("No account found in selected wallet");
           set({ address, kit });
         },
       });
@@ -46,11 +53,10 @@ export const useWalletStore = create<WalletState>((set, get) => ({
         err instanceof Error ? err.message : "Failed to connect wallet";
       const isNotInstalled =
         msg.toLowerCase().includes("not installed") ||
-        msg.toLowerCase().includes("freighter") ||
         msg.toLowerCase().includes("undefined");
       set({
         connectError: isNotInstalled
-          ? "Freighter wallet is not installed."
+          ? "Selected wallet is not installed."
           : msg,
       });
     }
@@ -70,3 +76,5 @@ export const useWalletStore = create<WalletState>((set, get) => ({
     return signedTxXdr;
   },
 }));
+
+export { FREIGHTER_ID, xBullWalletId };

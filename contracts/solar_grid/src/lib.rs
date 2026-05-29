@@ -23,6 +23,7 @@ pub enum ContractError {
     CannotActivateWithoutBalance = 11,
     InsufficientBalance = 12,
     CollaboratorAlreadyExists = 13,
+    DailyLimitReached = 14,
 }
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
@@ -47,11 +48,26 @@ pub enum PaymentPlan {
     UsageBased,
 }
 
+/// v1 layout — kept for migration from v1 to v2.
+/// Remove once all persistent entries have been migrated to v2.
+#[contracttype]
+#[derive(Clone, Debug)]
+pub struct LegacyMeterV1 {
+    pub version: u32,
+    pub owner: Address,
+    pub active: bool,
+    pub units_used: u64,
+    pub plan: PaymentPlan,
+    pub last_payment: u64,
+    pub expires_at: u64,
+}
+
 #[contracttype]
 #[derive(Clone, Debug)]
 pub struct Meter {
     /// Schema version — increment when fields are added/changed.
-    /// v1: initial layout (owner, active, balance, units_used, plan, last_payment, expires_at)
+    /// v1: initial layout (owner, active, units_used, plan, last_payment, expires_at)
+    /// v2: adds daily spending limit (daily_limit, day_spent, day_start)
     pub version: u32,
     pub owner: Address,
     pub active: bool,
@@ -59,6 +75,9 @@ pub struct Meter {
     pub plan: PaymentPlan,
     pub last_payment: u64,  // ledger timestamp
     pub expires_at: u64,    // ledger timestamp when access expires
+    pub daily_limit: i128,  // max stroops deductible per day; 0 = unlimited
+    pub day_spent: i128,    // stroops spent in the current 24-hour window
+    pub day_start: u64,     // timestamp when the current window started
 }
 
 /// v0 layout — kept for migration purposes only.
@@ -75,16 +94,46 @@ pub struct LegacyMeter {
     pub expires_at: u64,
 }
 
-/// Migrate a v0 (legacy) meter entry to the current v1 schema.
+/// Migrate a v0 (legacy) meter entry to the current v2 schema.
 fn migrate_meter_v0(old: LegacyMeter) -> Meter {
     Meter {
-        version: 1,
+        version: 2,
         owner: old.owner,
         active: old.active,
         units_used: old.units_used,
         plan: old.plan,
         last_payment: old.last_payment,
         expires_at: old.expires_at,
+        daily_limit: 0,
+        day_spent: 0,
+        day_start: old.last_payment,
+    }
+}
+
+/// Migrate a v1 meter entry to the current v2 schema.
+fn migrate_meter_v1(old: LegacyMeterV1) -> Meter {
+    Meter {
+        version: 2,
+        owner: old.owner,
+        active: old.active,
+        units_used: old.units_used,
+        plan: old.plan,
+        last_payment: old.last_payment,
+        expires_at: old.expires_at,
+        daily_limit: 0,
+        day_spent: 0,
+        day_start: old.last_payment,
+    }
+}
+
+/// Returns the number of seconds a payment plan is valid for.
+/// For UsageBased, returns u64::MAX (no time expiry); saturating_add
+/// with any reasonable timestamp still yields u64::MAX.
+fn plan_duration_secs(plan: &PaymentPlan) -> u64 {
+    match plan {
+        PaymentPlan::Daily => SECONDS_PER_DAY,
+        PaymentPlan::Weekly => SECONDS_PER_WEEK,
+        PaymentPlan::UsageBased => u64::MAX,
     }
 }
 
@@ -150,14 +199,18 @@ impl SolarGridContract {
         if env.storage().persistent().has(&key) {
             return Err(ContractError::MeterAlreadyExists);
         }
+        let now = env.ledger().timestamp();
         let meter = Meter {
-            version: 1,
+            version: 2,
             owner: owner.clone(),
             active: false,
             units_used: 0,
             plan: PaymentPlan::Daily,
-            last_payment: env.ledger().timestamp(),
-            expires_at: env.ledger().timestamp(),
+            last_payment: now,
+            expires_at: now,
+            daily_limit: 0,
+            day_spent: 0,
+            day_start: now,
         };
         env.storage().persistent().set(&key, &meter);
 
@@ -298,11 +351,7 @@ impl SolarGridContract {
         let key = DataKey::Meter(meter_id.clone());
         let mut meter = Self::get_meter_or_error(&env, &key)?;
         let now = env.ledger().timestamp();
-        let expires_at = match plan {
-            PaymentPlan::Daily => now.saturating_add(SECONDS_PER_DAY),
-            PaymentPlan::Weekly => now.saturating_add(SECONDS_PER_WEEK),
-            PaymentPlan::UsageBased => u64::MAX,
-        };
+        let expires_at = now.saturating_add(plan_duration_secs(&plan));
 
         // Track per-meter balance in contract storage
         let bal_key = DataKey::MeterBalance(meter_id.clone());
@@ -422,6 +471,18 @@ impl SolarGridContract {
         }
         let key = DataKey::Meter(meter_id.clone());
         let mut meter = Self::get_meter_or_error(&env, &key)?;
+
+        // Daily spending limit: reset window if 24 h has elapsed, then enforce cap.
+        let now = env.ledger().timestamp();
+        if now.saturating_sub(meter.day_start) > SECONDS_PER_DAY {
+            meter.day_spent = 0;
+            meter.day_start = now;
+        }
+        if meter.daily_limit > 0 && meter.day_spent.saturating_add(cost) > meter.daily_limit {
+            return Err(ContractError::DailyLimitReached);
+        }
+        meter.day_spent = meter.day_spent.saturating_add(cost);
+
         let bal_key = DataKey::MeterBalance(meter_id.clone());
         let balance: i128 = env.storage().persistent().get(&bal_key).unwrap_or(0);
         let new_balance = balance.saturating_sub(cost).max(0);
@@ -662,6 +723,7 @@ impl SolarGridContract {
         if updates.len() > 50 {
             return Err(ContractError::BatchTooLarge);
         }
+        let now = env.ledger().timestamp();
         for (meter_id, units, cost) in updates.iter() {
             let key = DataKey::Meter(meter_id.clone());
             if !env.storage().persistent().has(&key) {
@@ -672,6 +734,21 @@ impl SolarGridContract {
                 continue;
             }
             let mut meter: Meter = env.storage().persistent().get(&key).unwrap();
+
+            // Daily spending limit check — skip meter if limit exceeded.
+            if now.saturating_sub(meter.day_start) > SECONDS_PER_DAY {
+                meter.day_spent = 0;
+                meter.day_start = now;
+            }
+            if meter.daily_limit > 0 && meter.day_spent.saturating_add(cost) > meter.daily_limit {
+                env.events().publish(
+                    (symbol_short!("btch_skip"), EVT_NS, meter_id.clone()),
+                    (),
+                );
+                continue;
+            }
+            meter.day_spent = meter.day_spent.saturating_add(cost);
+
             let bal_key = DataKey::MeterBalance(meter_id.clone());
             let balance: i128 = env.storage().persistent().get(&bal_key).unwrap_or(0);
             let new_balance = balance.saturating_sub(cost).max(0);
@@ -698,8 +775,22 @@ impl SolarGridContract {
         Ok(())
     }
 
-    /// Migrate a meter from v0 (LegacyMeter) to v1 (Meter) schema.
-    /// Admin-only. Idempotent — safe to call on already-migrated meters.
+    /// Set the daily spending limit for a meter. Admin-only.
+    /// A limit of 0 means unlimited (the default for newly registered meters).
+    pub fn set_daily_limit(env: Env, meter_id: Symbol, limit: i128) -> Result<(), ContractError> {
+        Self::require_admin(&env)?;
+        if limit < 0 {
+            return Err(ContractError::InvalidAmount);
+        }
+        let key = DataKey::Meter(meter_id.clone());
+        let mut meter = Self::get_meter_or_error(&env, &key)?;
+        meter.daily_limit = limit;
+        env.storage().persistent().set(&key, &meter);
+        Ok(())
+    }
+
+    /// Migrate a meter from v0 (LegacyMeter) to v2 (Meter) schema.
+    /// Admin-only. Use migrate_meter_to_v2 for v1 → v2 migrations.
     pub fn migrate_meter(env: Env, meter_id: Symbol) -> Result<(), ContractError> {
         Self::require_admin(&env)?;
         let key = DataKey::Meter(meter_id);
@@ -709,6 +800,20 @@ impl SolarGridContract {
             .get(&key)
             .ok_or(ContractError::MeterNotFound)?;
         let migrated = migrate_meter_v0(legacy);
+        env.storage().persistent().set(&key, &migrated);
+        Ok(())
+    }
+
+    /// Migrate a meter from v1 (LegacyMeterV1) to v2 (Meter) schema. Admin-only.
+    pub fn migrate_meter_to_v2(env: Env, meter_id: Symbol) -> Result<(), ContractError> {
+        Self::require_admin(&env)?;
+        let key = DataKey::Meter(meter_id);
+        let legacy: LegacyMeterV1 = env
+            .storage()
+            .persistent()
+            .get(&key)
+            .ok_or(ContractError::MeterNotFound)?;
+        let migrated = migrate_meter_v1(legacy);
         env.storage().persistent().set(&key, &migrated);
         Ok(())
     }
@@ -1641,6 +1746,141 @@ mod tests {
         let bob = Address::generate(&env);
         client.add_collaborator(&alice, &6_000_u32);
         let result = client.try_add_collaborator(&bob, &5_000_u32); // 60 + 50 > 100%
+        assert_eq!(result, Err(Ok(ContractError::InvalidAmount)));
+    }
+
+    // ── Issue 195: plan_duration_secs helper tests ────────────────────────────
+
+    /// Daily plan sets expires_at = now + 86400.
+    #[test]
+    fn test_plan_duration_daily_sets_correct_expiry() {
+        let (env, client, _admin, token_address) = setup_with_token();
+        let token_admin_client = token::StellarAssetClient::new(&env, &token_address);
+        let user = Address::generate(&env);
+        let meter_id = symbol_short!("PD_DAY");
+        allowlist_and_register(&client, &meter_id, &user);
+        token_admin_client.mint(&user, &1_000_i128);
+
+        let before = env.ledger().timestamp();
+        client.make_payment(&meter_id, &user, &1_000_i128, &PaymentPlan::Daily);
+        let meter = client.get_meter(&meter_id);
+        assert_eq!(meter.expires_at - before, SECONDS_PER_DAY);
+    }
+
+    /// Weekly plan sets expires_at = now + 604800.
+    #[test]
+    fn test_plan_duration_weekly_sets_correct_expiry() {
+        let (env, client, _admin, token_address) = setup_with_token();
+        let token_admin_client = token::StellarAssetClient::new(&env, &token_address);
+        let user = Address::generate(&env);
+        let meter_id = symbol_short!("PD_WEEK");
+        allowlist_and_register(&client, &meter_id, &user);
+        token_admin_client.mint(&user, &1_000_i128);
+
+        let before = env.ledger().timestamp();
+        client.make_payment(&meter_id, &user, &1_000_i128, &PaymentPlan::Weekly);
+        let meter = client.get_meter(&meter_id);
+        assert_eq!(meter.expires_at - before, SECONDS_PER_WEEK);
+    }
+
+    /// UsageBased plan sets expires_at = u64::MAX (no time expiry).
+    #[test]
+    fn test_plan_duration_usage_based_sets_max_expiry() {
+        let (env, client, _admin, token_address) = setup_with_token();
+        let token_admin_client = token::StellarAssetClient::new(&env, &token_address);
+        let user = Address::generate(&env);
+        let meter_id = symbol_short!("PD_UB");
+        allowlist_and_register(&client, &meter_id, &user);
+        token_admin_client.mint(&user, &1_000_i128);
+
+        client.make_payment(&meter_id, &user, &1_000_i128, &PaymentPlan::UsageBased);
+        let meter = client.get_meter(&meter_id);
+        assert_eq!(meter.expires_at, u64::MAX);
+    }
+
+    // ── Issue 194: daily_spending_limit tests ─────────────────────────────────
+
+    /// With daily_limit > 0, exceeding it returns DailyLimitReached.
+    #[test]
+    fn test_daily_limit_blocks_usage_when_exceeded() {
+        let (env, client, _admin, token_address) = setup_with_token();
+        let token_admin_client = token::StellarAssetClient::new(&env, &token_address);
+        setup_oracle(&env, &client);
+
+        let user = Address::generate(&env);
+        let meter_id = symbol_short!("DL_HIT");
+        allowlist_and_register(&client, &meter_id, &user);
+        token_admin_client.mint(&user, &10_000_i128);
+        client.make_payment(&meter_id, &user, &10_000_i128, &PaymentPlan::UsageBased);
+
+        // Set daily limit to 500 stroops.
+        client.set_daily_limit(&meter_id, &500_i128);
+
+        // First usage within limit — should succeed.
+        client.update_usage(&meter_id, &1_u64, &400_i128);
+        assert_eq!(client.get_meter_balance(&meter_id), 9_600);
+
+        // Second call would push day_spent (400 + 200 = 600) over the 500 cap.
+        let result = client.try_update_usage(&meter_id, &1_u64, &200_i128);
+        assert_eq!(result, Err(Ok(ContractError::DailyLimitReached)));
+    }
+
+    /// After 24 h the window resets and spending is allowed again.
+    #[test]
+    fn test_daily_limit_window_resets_after_24h() {
+        let (env, client, _admin, token_address) = setup_with_token();
+        let token_admin_client = token::StellarAssetClient::new(&env, &token_address);
+        setup_oracle(&env, &client);
+
+        let user = Address::generate(&env);
+        let meter_id = symbol_short!("DL_RST");
+        allowlist_and_register(&client, &meter_id, &user);
+        token_admin_client.mint(&user, &10_000_i128);
+        client.make_payment(&meter_id, &user, &10_000_i128, &PaymentPlan::UsageBased);
+
+        client.set_daily_limit(&meter_id, &500_i128);
+
+        // Spend up to the limit on day 1.
+        client.update_usage(&meter_id, &1_u64, &500_i128);
+        let result = client.try_update_usage(&meter_id, &1_u64, &1_i128);
+        assert_eq!(result, Err(Ok(ContractError::DailyLimitReached)));
+
+        // Advance ledger by more than 24 h.
+        env.ledger().with_mut(|li| li.timestamp += SECONDS_PER_DAY + 1);
+
+        // Window resets — spending is allowed again.
+        client.update_usage(&meter_id, &1_u64, &500_i128);
+        assert_eq!(client.get_meter_balance(&meter_id), 9_000);
+    }
+
+    /// daily_limit = 0 means unlimited — any cost is accepted regardless of size.
+    #[test]
+    fn test_daily_limit_zero_means_unlimited() {
+        let (env, client, _admin, token_address) = setup_with_token();
+        let token_admin_client = token::StellarAssetClient::new(&env, &token_address);
+        setup_oracle(&env, &client);
+
+        let user = Address::generate(&env);
+        let meter_id = symbol_short!("DL_UNL");
+        allowlist_and_register(&client, &meter_id, &user);
+        token_admin_client.mint(&user, &100_000_i128);
+        client.make_payment(&meter_id, &user, &100_000_i128, &PaymentPlan::UsageBased);
+
+        // daily_limit defaults to 0 (unlimited) — large repeated costs must succeed.
+        client.update_usage(&meter_id, &1_u64, &40_000_i128);
+        client.update_usage(&meter_id, &1_u64, &40_000_i128);
+        assert_eq!(client.get_meter_balance(&meter_id), 20_000);
+    }
+
+    /// set_daily_limit with negative value returns InvalidAmount.
+    #[test]
+    fn test_set_daily_limit_negative_returns_invalid_amount() {
+        let (env, client, _admin, _token_address) = setup_with_token();
+        let user = Address::generate(&env);
+        let meter_id = symbol_short!("DL_NEG");
+        allowlist_and_register(&client, &meter_id, &user);
+
+        let result = client.try_set_daily_limit(&meter_id, &-1_i128);
         assert_eq!(result, Err(Ok(ContractError::InvalidAmount)));
     }
 

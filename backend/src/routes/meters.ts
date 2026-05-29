@@ -8,21 +8,59 @@ import {
 import { asyncHandler } from "../lib/asyncHandler.js";
 import { validateRequest, RegisterMeterSchema } from "../lib/validation.js";
 
-export function createMeterRouter(stellar: StellarService = stellarService) {
-  const meterRouter = Router();
+export const meterRouter = Router();
 
-  /** GET /api/meters — paginated list of all registered meters */
-  meterRouter.get(
-    "/",
-    asyncHandler(async (req, res) => {
-      const page = parseInt(req.query.page as string) || 0;
-      const pageSize = parseInt(req.query.pageSize as string) || 20;
-      const result = await stellar.query("get_all_meters", [
-        StellarSdk.nativeToScVal(page, { type: "u32" }),
-        StellarSdk.nativeToScVal(pageSize, { type: "u32" }),
-      ]);
-      res.json({ meters: StellarSdk.scValToNative(result) ?? [], page, pageSize });
-    }),
+/** GET /api/meters/export?format=csv|json — download all meter data */
+meterRouter.get(
+  "/export",
+  asyncHandler(async (req, res) => {
+    const format = req.query.format === "json" ? "json" : "csv";
+    const result = await contractQuery("get_all_meters", []);
+    const meters = (StellarSdk.scValToNative(result) as any[]) ?? [];
+
+    if (format === "json") {
+      res.setHeader("Content-Disposition", "attachment; filename=meters.json");
+      return res.json(meters);
+    }
+
+    const header = "owner,active,units_used,plan,last_payment,expires_at,daily_limit";
+    const rows = meters.map((m: any) =>
+      [m.owner, m.active, m.units_used, m.plan, m.last_payment, m.expires_at, m.daily_limit].join(",")
+    );
+    res.setHeader("Content-Type", "text/csv");
+    res.setHeader("Content-Disposition", "attachment; filename=meters.csv");
+    return res.send([header, ...rows].join("\n"));
+  }),
+);
+
+/** GET /api/meters/:id — get meter status */
+meterRouter.get(
+  "/:id",
+  asyncHandler(async (req, res) => {
+    const result = await contractQuery("get_meter", [
+      StellarSdk.nativeToScVal(req.params.id, { type: "symbol" }),
+    ]);
+    res.json({ meter: StellarSdk.scValToNative(result) });
+  }),
+);
+
+/** GET /api/meters/:id/access — check if meter is active */
+meterRouter.get(
+  "/:id/access",
+  asyncHandler(async (req, res) => {
+    const result = await contractQuery("check_access", [
+      StellarSdk.nativeToScVal(req.params.id, { type: "symbol" }),
+    ]);
+    res.json({ active: StellarSdk.scValToNative(result) });
+  }),
+);
+
+/** GET /api/meters/:id/history — paginated local usage history */
+meterRouter.get("/:id/history", (req, res) => {
+  const page = Math.max(1, Number(req.query.page ?? 1) || 1);
+  const pageSize = Math.min(
+    100,
+    Math.max(1, Number(req.query.pageSize ?? 25) || 25),
   );
 
   /** GET /api/meters/:id — get meter status */

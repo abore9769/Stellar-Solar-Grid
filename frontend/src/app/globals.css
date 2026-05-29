@@ -35,6 +35,12 @@ input, select, textarea {
   font-size: 16px;
 }
 
+/* Skeleton shimmer animation */
+@keyframes shimmer {
+  0% { background-position: 200% 0; }
+  100% { background-position: -200% 0; }
+}
+
 /* Scrollable table wrapper utility */
 .table-scroll {
   overflow-x: auto;
