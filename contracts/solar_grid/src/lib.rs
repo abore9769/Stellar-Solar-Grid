@@ -1962,3 +1962,5 @@ mod tests {
         assert_eq!(client.check_access(&meter_id), true);
     }
 }
+
+mod test;

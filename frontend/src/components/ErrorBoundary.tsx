@@ -1,6 +1,7 @@
 "use client";
 
 import { Component, ReactNode } from "react";
+import styles from './ErrorBoundary.module.css';
 
 interface State {
   hasError: boolean;
@@ -17,10 +18,13 @@ export class ErrorBoundary extends Component<{ children: ReactNode }, State> {
   render() {
     if (this.state.hasError) {
       return (
-        <div style={{ padding: 40, textAlign: "center" }}>
-          <h2>Something went wrong</h2>
-          <p>{this.state.error?.message}</p>
-          <button onClick={() => this.setState({ hasError: false, error: null })}>
+        <div className={styles.container}>
+          <h2 className={styles.title}>Something went wrong</h2>
+          <p className={styles.message}>{this.state.error?.message}</p>
+          <button 
+            className={styles.retryButton}
+            onClick={() => this.setState({ hasError: false, error: null })}
+          >
             Try Again
           </button>
         </div>

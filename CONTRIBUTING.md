@@ -7,7 +7,10 @@ Thanks for your interest in contributing! This guide covers everything you need 
 - [Getting Started](#getting-started)
 - [Project Structure](#project-structure)
 - [Development Setup](#development-setup)
+- [Running Tests](#running-tests)
 - [Coding Standards](#coding-standards)
+- [Security Considerations](#security-considerations)
+- [Troubleshooting](#troubleshooting)
 - [Submitting a Pull Request](#submitting-a-pull-request)
 
 ---
@@ -93,6 +96,59 @@ npm run dev
 
 ---
 
+## Running Tests
+
+### Smart Contract Tests
+
+Run the complete test suite:
+```bash
+cd contracts
+cargo test
+```
+
+Run specific test modules:
+```bash
+cargo test test_register_and_payment
+cargo test --test integration_tests
+```
+
+### Frontend Tests
+
+```bash
+cd frontend
+npm run test          # Run Jest tests
+npm run test:watch    # Run tests in watch mode
+npm run test:coverage # Generate coverage report
+```
+
+### Backend Tests
+
+```bash
+cd backend
+npm run test          # Run test suite
+npm run test:watch    # Run tests in watch mode
+```
+
+### End-to-End Testing
+
+1. Start all services:
+   ```bash
+   docker-compose up -d
+   ```
+
+2. Deploy contract to testnet:
+   ```bash
+   cd contracts
+   stellar contract deploy \
+     --wasm target/wasm32-unknown-unknown/release/solar_grid.wasm \
+     --network testnet
+   ```
+
+3. Update environment files with deployed contract ID
+4. Test the complete flow through the frontend dashboard
+
+---
+
 ## Coding Standards
 
 ### TypeScript (frontend & backend)
@@ -119,6 +175,63 @@ npm run dev
   fix: correct meter access check logic
   docs: update contract deployment steps
   ```
+
+---
+
+## Security Considerations
+
+### Environment Variables
+
+- Never commit `.env` files or expose secret keys
+- Use `.env.example` as a template with placeholder values
+- Rotate keys regularly in production environments
+- Use different keys for testnet and mainnet
+
+### Smart Contract Security
+
+- All contract functions validate inputs and handle errors explicitly
+- Payment amounts are checked for overflow/underflow
+- Access control is enforced through allowlists and ownership checks
+- Test edge cases thoroughly, especially around balance calculations
+
+### API Security
+
+- All endpoints validate request schemas using Zod
+- Rate limiting is implemented for payment endpoints
+- Webhook signatures are verified before processing
+- CORS is configured appropriately for the frontend domain
+
+---
+
+## Troubleshooting
+
+### Common Issues
+
+**Contract deployment fails:**
+- Ensure you have testnet XLM in your account
+- Check that the WASM file was built successfully
+- Verify network configuration in Stellar CLI
+
+**Backend fails to start:**
+- Check that all required environment variables are set
+- Ensure MQTT broker is running (via Docker Compose)
+- Verify Stellar RPC endpoint is accessible
+
+**Frontend build errors:**
+- Clear node_modules and reinstall: `rm -rf node_modules package-lock.json && npm install`
+- Check that environment variables match the deployed contract
+- Ensure Freighter wallet is installed and connected to testnet
+
+**Tests failing:**
+- For contract tests: ensure `wasm32-unknown-unknown` target is installed
+- For frontend tests: check that test environment variables are set
+- For integration tests: ensure all services are running
+
+### Getting Help
+
+- Check existing [Issues](../../issues) for similar problems
+- Open a [Discussion](../../discussions) for questions
+- Review the [API documentation](backend/API.md) for endpoint details
 
 ---
 

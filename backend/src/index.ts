@@ -12,6 +12,21 @@ import {
   startUsageEventRetryWorker,
 } from "./lib/usageEvents.js";
 
+// Environment variable validation
+const REQUIRED_ENV = [
+  'ADMIN_SECRET_KEY',
+  'CONTRACT_ID',
+  'STELLAR_RPC_URL',
+  'MQTT_BROKER',
+];
+
+const missing = REQUIRED_ENV.filter(k => !process.env[k]);
+if (missing.length > 0) {
+  console.error('Missing required environment variables:', missing.join(', '));
+  console.error('Copy backend/.env.example to backend/.env and fill in the values.');
+  process.exit(1);
+}
+
 const app = express();
 const PORT = process.env.PORT ?? 3001;
 

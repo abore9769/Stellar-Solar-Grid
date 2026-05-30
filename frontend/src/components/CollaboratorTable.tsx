@@ -11,6 +11,8 @@ interface Props {
   collaborators: Collaborator[];
 }
 
+import styles from './CollaboratorTable.module.css';
+
 export default function CollaboratorTable({ collaborators }: Props) {
   const [copied, setCopied] = useState<string | null>(null);
 
@@ -25,7 +27,7 @@ export default function CollaboratorTable({ collaborators }: Props) {
     return (
       <div className="card">
         <span className="badge">Collaborators</span>
-        <p className="text-sm mt-2" style={{ color: "var(--text-secondary, #9ca3af)" }}>
+        <p className={`text-sm mt-2 ${styles.emptyMessage}`}>
           No collaborators found. Initialize the contract to add collaborators.
         </p>
       </div>
@@ -39,7 +41,7 @@ export default function CollaboratorTable({ collaborators }: Props) {
         <thead>
           <tr>
             <th>Address</th>
-            <th style={{ textAlign: "right" }}>Share</th>
+            <th className="text-right">Share</th>
           </tr>
         </thead>
         <tbody>
@@ -62,8 +64,8 @@ export default function CollaboratorTable({ collaborators }: Props) {
               </td>
 
               {/* Share bar with visible percentage label */}
-              <td style={{ textAlign: "right" }}>
-                <span className="share-label">
+              <td className={styles.shareCell}>
+                <span className={styles.shareLabel}>
                   {(c.basisPoints / 100).toFixed(2)}%
                 </span>
                 <div
