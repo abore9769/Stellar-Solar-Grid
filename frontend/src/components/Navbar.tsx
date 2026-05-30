@@ -41,11 +41,29 @@ export default function Navbar() {
             </Link>
           ))}
           <WalletButton address={short} connect={connect} disconnect={disconnect} />
+          {address && (
+            <button
+              onClick={disconnect}
+              className="text-xs text-gray-400 hover:text-white transition ml-2"
+              title="Disconnect wallet"
+            >
+              Disconnect
+            </button>
+          )}
         </div>
 
         {/* Mobile: wallet button + hamburger */}
         <div className="flex items-center gap-2 sm:hidden">
           <WalletButton address={short} connect={connect} disconnect={disconnect} compact />
+          {address && (
+            <button
+              onClick={disconnect}
+              className="text-xs text-gray-400 hover:text-white transition"
+              title="Disconnect wallet"
+            >
+              ✕
+            </button>
+          )}
           <button
             onClick={() => setMenuOpen((o) => !o)}
             aria-label={menuOpen ? "Close menu" : "Open menu"}
@@ -123,13 +141,25 @@ function WalletButton({
   disconnect: () => void;
   compact?: boolean;
 }) {
+  const { address: fullAddress } = useWalletStore();
+  const [copied, setCopied] = useState(false);
+
+  const copyAddress = async () => {
+    if (!fullAddress) return;
+    await navigator.clipboard.writeText(fullAddress);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
   if (address) {
     return (
       <button
-        onClick={disconnect}
+        onClick={copyAddress}
         className="rounded-lg border border-solar-yellow px-3 py-1.5 text-xs font-medium text-solar-yellow hover:bg-solar-yellow hover:text-solar-dark transition"
+        title="Copy full address"
+        aria-label="Copy wallet address"
       >
-        {address}
+        {copied ? 'Copied!' : address}
       </button>
     );
   }

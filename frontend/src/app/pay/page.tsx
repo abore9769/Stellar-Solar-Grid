@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import Navbar from "@/components/Navbar";
 import OfflinePaymentModal from "@/components/OfflinePaymentModal";
 import { useToast } from "@/components/ToastProvider";
@@ -29,6 +29,43 @@ export default function PayPage() {
   const [status, setStatus] = useState<Status>("idle");
   const [showSmsModal, setShowSmsModal] = useState(false);
   const [showConfirm, setShowConfirm] = useState(false);
+  const [xlmRate, setXlmRate] = useState<number | null>(null);
+  const [currency, setCurrency] = useState("NGN");
+
+  // Load currency preference from localStorage
+  useEffect(() => {
+    const savedCurrency = localStorage.getItem("preferredCurrency");
+    if (savedCurrency) {
+      setCurrency(savedCurrency);
+    }
+  }, []);
+
+  // Fetch XLM exchange rate
+  useEffect(() => {
+    const fetchRate = async () => {
+      try {
+        const currencyCode = currency.toLowerCase();
+        const response = await fetch(
+          `https://api.coingecko.com/api/v3/simple/price?ids=stellar&vs_currencies=${currencyCode}`
+        );
+        const data = await response.json();
+        setXlmRate(data.stellar[currencyCode]);
+      } catch (error) {
+        console.error("Failed to fetch exchange rate:", error);
+        setXlmRate(null);
+      }
+    };
+
+    fetchRate();
+    // Refresh rate every 5 minutes
+    const interval = setInterval(fetchRate, 5 * 60 * 1000);
+    return () => clearInterval(interval);
+  }, [currency]);
+
+  const handleCurrencyChange = (newCurrency: string) => {
+    setCurrency(newCurrency);
+    localStorage.setItem("preferredCurrency", newCurrency);
+  };
 
   const EXPLORER_BASE = process.env.NEXT_PUBLIC_NETWORK_PASSPHRASE?.includes("Test")
     ? "https://stellar.expert/explorer/testnet/tx"
@@ -183,6 +220,26 @@ export default function PayPage() {
                   required
                   className="w-full rounded-lg border border-white/10 bg-solar-dark px-4 py-2.5 text-sm text-white placeholder-gray-600 focus:border-solar-yellow focus:outline-none transition"
                 />
+                {xlmRate && amount && (
+                  <div className="mt-2 flex items-center justify-between">
+                    <p className="text-xs text-gray-400">
+                      ≈ {(parseFloat(amount) * xlmRate).toLocaleString('en-NG', { 
+                        style: 'currency', 
+                        currency: currency 
+                      })}
+                    </p>
+                    <select
+                      value={currency}
+                      onChange={(e) => handleCurrencyChange(e.target.value)}
+                      className="text-xs bg-solar-dark border border-white/10 rounded px-2 py-1 text-gray-300"
+                    >
+                      <option value="NGN">NGN</option>
+                      <option value="KES">KES</option>
+                      <option value="GHS">GHS</option>
+                      <option value="USD">USD</option>
+                    </select>
+                  </div>
+                )}
               </div>
 
               {/* Plan */}
@@ -260,7 +317,17 @@ export default function PayPage() {
                 </div>
                 <div className="flex justify-between">
                   <span className="text-gray-400">Amount</span>
-                  <strong className="text-solar-yellow">{amount} XLM</strong>
+                  <div className="text-right">
+                    <strong className="text-solar-yellow">{amount} XLM</strong>
+                    {xlmRate && (
+                      <div className="text-xs text-gray-400">
+                        ≈ {(parseFloat(amount) * xlmRate).toLocaleString('en-NG', { 
+                          style: 'currency', 
+                          currency: currency 
+                        })}
+                      </div>
+                    )}
+                  </div>
                 </div>
               </div>
               <div className="mt-6 flex gap-3">
