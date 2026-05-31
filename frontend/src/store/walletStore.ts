@@ -6,7 +6,7 @@ import {
   WalletNetwork,
   FREIGHTER_ID,
   FreighterModule,
-  xBullWalletId,
+  XBULL_ID as xBullWalletId,
   xBullModule,
 } from "@creit.tech/stellar-wallets-kit";
 

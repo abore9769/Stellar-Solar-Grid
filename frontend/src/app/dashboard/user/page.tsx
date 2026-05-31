@@ -51,7 +51,7 @@ function PlanBadge({ plan }: { plan: string }) {
 
 function ErrorCard({ meterId, error }: { meterId: string; error: string }) {
   return (
-    <div className="rounded-xl border border-red-500/40 bg-red-900/20 p-5 space-y-4">
+    <div className="rounded-xl border border-red-500/40 bg-red-900/20 p-4 sm:p-5 space-y-4">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="font-mono text-sm text-red-400 font-semibold">{meterId}</span>
@@ -97,7 +97,7 @@ function MeterCard({ meterId, meter }: { meterId: string; meter: MeterData }) {
   };
 
   return (
-    <div className="rounded-xl border border-white/10 bg-solar-accent p-5 space-y-4">
+    <div className="rounded-xl border border-white/10 bg-solar-accent p-4 sm:p-5 space-y-4">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="font-mono text-sm text-solar-yellow font-semibold">{meterId}</span>
@@ -108,7 +108,7 @@ function MeterCard({ meterId, meter }: { meterId: string; meter: MeterData }) {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="grid grid-cols-1 min-[480px]:grid-cols-2 sm:grid-cols-4 gap-3">
         {[
           { label: "Balance", value: `${stroopsToXlm(meter.balance)} XLM` },
           { label: "Units Used", value: `${Number(meter.units_used) / 1000} kWh` },
@@ -298,12 +298,12 @@ export default function UserDashboardPage() {
         {address && loading && meterIds.length === 0 && (
           <div className="space-y-4">
             {[0, 1].map((i) => (
-              <div key={i} className="rounded-xl border border-white/10 bg-solar-accent p-5 space-y-4">
+              <div key={i} className="rounded-xl border border-white/10 bg-solar-accent p-4 sm:p-5 space-y-4">
                 <div className="flex items-center justify-between gap-2">
                   <Skeleton width="30%" height={16} />
                   <Skeleton width="20%" height={24} />
                 </div>
-                <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+                <div className="grid grid-cols-1 min-[480px]:grid-cols-2 sm:grid-cols-4 gap-3">
                   {[1, 2, 3, 4].map((j) => (
                     <div key={j} className="flex flex-col gap-1">
                       <Skeleton width="60%" height={10} />

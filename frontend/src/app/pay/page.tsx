@@ -31,6 +31,7 @@ export default function PayPage() {
   const [showConfirm, setShowConfirm] = useState(false);
   const [xlmRate, setXlmRate] = useState<number | null>(null);
   const [currency, setCurrency] = useState("NGN");
+  const [txHash, setTxHash] = useState<string | null>(null);
 
   // Load currency preference from localStorage
   useEffect(() => {
@@ -83,8 +84,10 @@ export default function PayPage() {
   }
 
   async function confirmPayment() {
+    if (!address) return;
     setShowConfirm(false);
     setStatus("loading");
+    setTxHash(null);
 
     try {
       const hash = await makePayment(address, meterId.trim(), parseFloat(amount), plan);
@@ -96,6 +99,7 @@ export default function PayPage() {
         actionLabel: "View transaction",
       });
       setAmount("");
+      setTxHash(hash);
     } catch (err: unknown) {
       const friendly = parseWalletError(err);
       showToast({
@@ -188,81 +192,105 @@ export default function PayPage() {
               )}
             </div>
           ) : (
-            <form
-              onSubmit={handlePay}
-              className="rounded-xl border border-white/10 bg-solar-accent p-6 space-y-5"
-            >
-              {/* Meter ID */}
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1.5">Meter ID</label>
-                <input
-                  type="text"
-                  value={meterId}
-                  onChange={(e) => setMeterId(e.target.value)}
-                  placeholder="e.g. METER1"
-                  required
-                  className="w-full rounded-lg border border-white/10 bg-solar-dark px-4 py-2.5 text-sm text-white placeholder-gray-600 focus:border-solar-yellow focus:outline-none transition"
-                />
-              </div>
-
-              {/* Amount */}
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-1.5">
-                  Amount (XLM)
-                </label>
-                <input
-                  type="number"
-                  value={amount}
-                  onChange={(e) => setAmount(e.target.value)}
-                  placeholder="0.00"
-                  min="0.0000001"
-                  step="any"
-                  required
-                  className="w-full rounded-lg border border-white/10 bg-solar-dark px-4 py-2.5 text-sm text-white placeholder-gray-600 focus:border-solar-yellow focus:outline-none transition"
-                />
-                {xlmRate && amount && (
-                  <div className="mt-2 flex items-center justify-between">
-                    <p className="text-xs text-gray-400">
-                      ≈ {(parseFloat(amount) * xlmRate).toLocaleString('en-NG', { 
-                        style: 'currency', 
-                        currency: currency 
-                      })}
-                    </p>
-                    <select
-                      value={currency}
-                      onChange={(e) => handleCurrencyChange(e.target.value)}
-                      className="text-xs bg-solar-dark border border-white/10 rounded px-2 py-1 text-gray-300"
-                    >
-                      <option value="NGN">NGN</option>
-                      <option value="KES">KES</option>
-                      <option value="GHS">GHS</option>
-                      <option value="USD">USD</option>
-                    </select>
+            <>
+              {txHash && (
+                <div className="mb-6 rounded-xl border border-green-600/40 bg-green-950/40 p-5">
+                  <div className="flex items-start gap-3">
+                    <span className="text-2xl mt-0.5">✅</span>
+                    <div className="flex-1">
+                      <p className="text-sm font-semibold text-green-400 mb-1">
+                        Payment successful!
+                      </p>
+                      <p className="text-xs text-gray-400 mb-3">
+                        Your transaction has been submitted to the Stellar network.
+                      </p>
+                      <a
+                        href={`${EXPLORER_BASE}/${txHash}`}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-sm text-solar-yellow underline underline-offset-2 hover:opacity-85 transition break-all font-mono"
+                      >
+                        View on Stellar Expert: {txHash.slice(0, 12)}...
+                      </a>
+                    </div>
                   </div>
-                )}
-              </div>
-
-              {/* Plan */}
-              <div>
-                <label className="block text-sm font-medium text-gray-300 mb-2">Billing Plan</label>
-                <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-                  {PLANS.map((p) => (
-                    <button
-                      key={p.value}
-                      type="button"
-                      onClick={() => setPlan(p.value)}
-                      className={`rounded-lg border px-3 py-3 text-left transition ${
-                        plan === p.value
-                          ? "border-solar-yellow bg-solar-yellow/10 text-solar-yellow"
-                          : "border-white/10 text-gray-400 hover:border-white/30"
-                      }`}
-                    >
-                      <div className="text-sm font-semibold">{p.label}</div>
-                      <div className="text-xs opacity-70 mt-0.5">{p.desc}</div>
-                    </button>
-                  ))}
                 </div>
-              </div>
+              )}
+              <form
+                onSubmit={handlePay}
+                className="rounded-xl border border-white/10 bg-solar-accent p-6 space-y-5"
+              >
+                {/* Meter ID */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-1.5">Meter ID</label>
+                  <input
+                    type="text"
+                    value={meterId}
+                    onChange={(e) => { setMeterId(e.target.value); setTxHash(null); }}
+                    placeholder="e.g. METER1"
+                    required
+                    className="w-full rounded-lg border border-white/10 bg-solar-dark px-4 py-2.5 text-sm text-white placeholder-gray-600 focus:border-solar-yellow focus:outline-none transition"
+                  />
+                </div>
+
+                {/* Amount */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-1.5">
+                    Amount (XLM)
+                  </label>
+                  <input
+                    type="number"
+                    value={amount}
+                    onChange={(e) => { setAmount(e.target.value); setTxHash(null); }}
+                    placeholder="0.00"
+                    min="0.0000001"
+                    step="any"
+                    required
+                    className="w-full rounded-lg border border-white/10 bg-solar-dark px-4 py-2.5 text-sm text-white placeholder-gray-600 focus:border-solar-yellow focus:outline-none transition"
+                  />
+                  {xlmRate && amount && (
+                    <div className="mt-2 flex items-center justify-between">
+                      <p className="text-xs text-gray-400">
+                        ≈ {(parseFloat(amount) * xlmRate).toLocaleString('en-NG', { 
+                          style: 'currency', 
+                          currency: currency 
+                        })}
+                      </p>
+                      <select
+                        value={currency}
+                        onChange={(e) => handleCurrencyChange(e.target.value)}
+                        className="text-xs bg-solar-dark border border-white/10 rounded px-2 py-1 text-gray-300"
+                      >
+                        <option value="NGN">NGN</option>
+                        <option value="KES">KES</option>
+                        <option value="GHS">GHS</option>
+                        <option value="USD">USD</option>
+                      </select>
+                    </div>
+                  )}
+                </div>
+
+                {/* Plan */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-300 mb-2">Billing Plan</label>
+                  <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
+                    {PLANS.map((p) => (
+                      <button
+                        key={p.value}
+                        type="button"
+                        onClick={() => { setPlan(p.value); setTxHash(null); }}
+                        className={`rounded-lg border px-3 py-3 text-left transition ${
+                          plan === p.value
+                            ? "border-solar-yellow bg-solar-yellow/10 text-solar-yellow"
+                            : "border-white/10 text-gray-400 hover:border-white/30"
+                        }`}
+                      >
+                        <div className="text-sm font-semibold">{p.label}</div>
+                        <div className="text-xs opacity-70 mt-0.5">{p.desc}</div>
+                      </button>
+                    ))}
+                  </div>
+                </div>
 
               {/* Submit */}
               <button
@@ -291,7 +319,8 @@ export default function PayPage() {
                 </p>
               )}
             </form>
-          )}
+          </>
+        )}
         </div>
 
         {/* ── Payment confirmation modal ── */}
