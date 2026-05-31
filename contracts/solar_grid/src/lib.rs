@@ -547,9 +547,8 @@ impl SolarGridContract {
     }
 
     /// Get meter details.
-    pub fn get_meter(env: Env, meter_id: Symbol) -> Result<Meter, ContractError> {
-        let key = DataKey::Meter(meter_id);
-        Self::get_meter_or_error(&env, &key)
+    pub fn get_meter(env: Env, meter_id: Symbol) -> Option<Meter> {
+        env.storage().persistent().get(&DataKey::Meter(meter_id))
     }
 
     /// Admin can manually toggle meter access (e.g. maintenance).
@@ -1643,7 +1642,7 @@ mod tests {
 
         client.update_usage(&meter_id, &5_u64, &200_i128);
         assert_eq!(client.get_meter_balance(&meter_id), 800);
-        assert_eq!(client.get_meter(&meter_id).units_used, 5);
+        assert_eq!(client.get_meter(&meter_id).unwrap().units_used, 5);
     }
 
     /// batch_update_usage panics with OracleNotSet when no oracle is registered.
@@ -1655,6 +1654,25 @@ mod tests {
 
         let result = client.try_batch_update_usage(&vec![&env, (meter_id.clone(), 1_u64, 100_i128)]);
         assert_eq!(result, Err(Ok(ContractError::OracleNotSet)));
+    }
+
+    #[test]
+    fn test_get_meter_existing_and_missing() {
+        let (env, client, _admin) = setup();
+        let user = Address::generate(&env);
+        let meter_id = symbol_short!("EXISTING");
+        
+        allowlist_and_register(&client, &meter_id, &user);
+        
+        // Existing meter should return Some
+        let existing = client.get_meter(&meter_id);
+        assert!(existing.is_some());
+        assert_eq!(existing.unwrap().owner, user);
+
+        // Missing meter should return None
+        let missing_id = symbol_short!("MISSING");
+        let missing = client.get_meter(&missing_id);
+        assert!(missing.is_none());
     }
 
     // ── NotInitialized guard tests ────────────────────────────────────────────
