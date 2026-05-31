@@ -92,7 +92,26 @@ export function startIoTBridge() {
 }
 
 function startMqttBridge() {
-  const client = mqtt.connect(BROKER);
+  const client = mqtt.connect(BROKER, {
+    reconnectPeriod: 1000,       // start at 1s
+    connectTimeout: 10_000,
+  });
+
+  const MAX_RECONNECT_ATTEMPTS = Number(process.env.MQTT_MAX_RECONNECT_ATTEMPTS ?? 10);
+  let reconnectAttempts = 0;
+
+  client.on('reconnect', () => {
+    reconnectAttempts++;
+    if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
+      logger.error('MQTT reconnect attempts exhausted', { maxAttempts: MAX_RECONNECT_ATTEMPTS });
+      client.end(); // stop reconnecting
+      return;
+    }
+    const delay = Math.min(1000 * 2 ** reconnectAttempts, 30_000);
+    client.options.reconnectPeriod = delay;
+    logger.warn({ attempt: reconnectAttempts, nextDelayMs: delay }, 'MQTT reconnecting');
+  });
+
   let pending: Reading[] = [];
 
   const flush = async () => {
@@ -112,6 +131,8 @@ function startMqttBridge() {
   setInterval(flush, FLUSH_INTERVAL_MS);
 
   client.on("connect", () => {
+    reconnectAttempts = 0;
+    client.options.reconnectPeriod = 1000;
     logger.info(`IoT bridge connected to ${BROKER}`);
     client.subscribe(TOPIC, (err) => {
       if (err) logger.error("MQTT subscribe error", { err });
@@ -174,7 +195,7 @@ function startMqttBridge() {
   });
 
   client.on("error", (err) => {
-    logger.warn("MQTT connection error (will retry)", { message: err.message });
+    logger.error({ err }, "MQTT error");
   });
 }
 
