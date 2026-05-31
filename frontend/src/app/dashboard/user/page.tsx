@@ -3,9 +3,9 @@
 import { useEffect, useState, useCallback, useMemo } from "react";
 import Link from "next/link";
 import Navbar from "@/components/Navbar";
-import UsageChart, { type UsageDataPoint } from "@/components/UsageChart";
 import { SkeletonCard } from "@/components/SkeletonCard";
 import { Skeleton } from "@/components/Skeleton";
+import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
 import { useWalletStore } from "@/store/walletStore";
 import { getMeter, getMetersByOwner, type MeterData } from "@/services/meterService";
 import { parseWalletError } from "@/lib/errors";
@@ -85,6 +85,23 @@ function MeterCard({ meterId, meter }: { meterId: string; meter: MeterData }) {
   const isExpired = expiresAt !== Number.MAX_SAFE_INTEGER && expiresAt > 0 && now >= expiresAt;
   const hasAccess = meter.active && meter.balance > 0n && !isExpired;
 
+  const [history, setHistory] = useState<any[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(true);
+
+  useEffect(() => {
+    setLoadingHistory(true);
+    fetch('/api/meters/' + meterId + '/history?limit=7')
+      .then(r => r.json())
+      .then(d => {
+        setHistory(d.events || []);
+        setLoadingHistory(false);
+      })
+      .catch(() => {
+        setHistory([]);
+        setLoadingHistory(false);
+      });
+  }, [meterId]);
+
   // Format expiry date
   const formatExpiry = () => {
     if (meter.plan === "UsageBased" || expiresAt === Number.MAX_SAFE_INTEGER) {
@@ -136,6 +153,36 @@ function MeterCard({ meterId, meter }: { meterId: string; meter: MeterData }) {
         </div>
       )}
 
+      {/* Usage History Chart */}
+      <div className="pt-4 border-t border-white/10">
+        <h3 className="text-sm font-semibold text-gray-300 mb-4">Last 7 Days Usage</h3>
+        {loadingHistory ? (
+          <Skeleton height={200} />
+        ) : history.length === 0 ? (
+          <div className="h-[200px] flex items-center justify-center text-gray-500 text-sm border border-white/5 rounded-lg bg-black/20">
+            No history available
+          </div>
+        ) : (
+          <ResponsiveContainer width="100%" height={200}>
+            <LineChart data={history}>
+              <XAxis 
+                dataKey="recorded_at" 
+                tickFormatter={d => new Date(d).toLocaleDateString()} 
+                stroke="#9ca3af"
+                fontSize={12}
+              />
+              <YAxis stroke="#9ca3af" fontSize={12} />
+              <Tooltip 
+                contentStyle={{ backgroundColor: '#1c2b3a', border: 'none', borderRadius: '8px' }}
+                itemStyle={{ color: '#00d4ff' }}
+                labelStyle={{ color: '#9ca3af' }}
+              />
+              <Line type="monotone" dataKey="units" stroke="#00d4ff" strokeWidth={2} dot={false} />
+            </LineChart>
+          </ResponsiveContainer>
+        )}
+      </div>
+
       {/* Actions */}
       <div className="flex gap-2 pt-1">
         <Link
@@ -155,26 +202,6 @@ function MeterCard({ meterId, meter }: { meterId: string; meter: MeterData }) {
   );
 }
 
-/** Build a 7-day usage history from a meter's total units_used, spreading
- *  consumption over the past week with a small sinusoidal variation so the
- *  chart always has an interesting shape rather than a flat line. */
-function buildUsageHistory(meters: Record<string, MeterData>): UsageDataPoint[] {
-  const totalUnits = Object.values(meters).reduce(
-    (sum, m) => sum + Number(m.units_used),
-    0
-  );
-  return Array.from({ length: 7 }, (_, i) => {
-    const d = new Date();
-    d.setDate(d.getDate() - (6 - i));
-    const label = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-    // Spread total units across 7 days with a sine wave for a realistic curve
-    const share = totalUnits > 0
-      ? +((totalUnits / 7) * (0.7 + 0.3 * Math.sin(i * 1.1))).toFixed(2)
-      : 0;
-    return { date: label, units: share };
-  });
-}
-
 export default function UserDashboardPage() {
   const { address, connect } = useWalletStore();
   const { showToast } = useToast();
@@ -185,8 +212,6 @@ export default function UserDashboardPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
-
-  const chartData = useMemo(() => buildUsageHistory(meters), [meters]);
 
   const fetchAll = useCallback(async () => {
     if (!address) return;
@@ -339,15 +364,7 @@ export default function UserDashboardPage() {
           </div>
         )}
 
-        {/* Usage chart — visible once connected; shows skeleton while loading */}
-        {address && (
-          <div className="mt-6">
-            <UsageChart
-              data={chartData}
-              loading={loading && meterIds.length === 0}
-            />
-          </div>
-        )}
+
       </main>
     </>
   );
