@@ -2,9 +2,16 @@
 @tailwind components;
 @tailwind utilities;
 
-:root {
-  --foreground: #ededed;
-  --background: #1a1a2e;
+:root[data-theme='dark'] {
+  --bg-primary: #0d1b2a;
+  --bg-card: #1c2b3a;
+  --text-primary: #e0e6ed;
+}
+
+:root[data-theme='light'] {
+  --bg-primary: #f0f4f8;
+  --bg-card: #ffffff;
+  --text-primary: #1a202c;
 }
 
 html {
@@ -15,8 +22,8 @@ html {
 }
 
 body {
-  color: var(--foreground);
-  background: var(--background);
+  color: var(--text-primary);
+  background: var(--bg-primary);
   font-family: system-ui, -apple-system, sans-serif;
   /* Prevent horizontal overflow on small screens */
   overflow-x: hidden;
@@ -49,7 +56,7 @@ input, select, textarea {
 
 /* ── Shared card / badge ─────────────────────────────────────────────────── */
 .card {
-  background: #16213e;
+  background: var(--bg-card);
   border: 1px solid rgba(255, 255, 255, 0.08);
   border-radius: 0.75rem;
   padding: 1.25rem 1.5rem;
