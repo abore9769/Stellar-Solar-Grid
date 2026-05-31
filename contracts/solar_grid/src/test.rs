@@ -33,7 +33,7 @@ mod additional_tests {
     #[test]
     fn test_register_and_payment() {
         let (env, client, admin) = setup();
-        let meter_id = symbol_short!("METER1");
+        let meter_id = String::from_str(&env, "SG-2024-METER1");
         let owner = Address::generate(&env);
         
         // Initialize contract first
@@ -56,7 +56,7 @@ mod additional_tests {
     #[test]
     fn test_double_register_fails() {
         let (env, client, admin) = setup();
-        let meter_id = symbol_short!("METER1");
+        let meter_id = String::from_str(&env, "SG-2024-METER1");
         let owner = Address::generate(&env);
         
         // Initialize contract
@@ -81,7 +81,7 @@ mod additional_tests {
     fn test_payment_on_inactive_meter() {
         let (env, client, admin, token_address) = setup_with_token();
         let token_admin_client = token::StellarAssetClient::new(&env, &token_address);
-        let meter_id = symbol_short!("METER1");
+        let meter_id = String::from_str(&env, "SG-2024-METER1");
         let owner = Address::generate(&env);
         
         // Register meter but don't activate
@@ -99,7 +99,7 @@ mod additional_tests {
     #[test]
     fn test_zero_balance_access() {
         let (env, client, admin, token_address) = setup_with_token();
-        let meter_id = symbol_short!("METER1");
+        let meter_id = String::from_str(&env, "SG-2024-METER1");
         let owner = Address::generate(&env);
         
         // Register meter
@@ -117,7 +117,7 @@ mod additional_tests {
         let oracle = Address::generate(&env);
         client.set_oracle(&oracle);
         
-        let meter_id = symbol_short!("METER1");
+        let meter_id = String::from_str(&env, "SG-2024-METER1");
         let owner = Address::generate(&env);
         
         // Setup meter with payment
