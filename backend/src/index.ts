@@ -1,5 +1,6 @@
 import "dotenv/config";
 import express from "express";
+import timeout from "connect-timeout";
 import { NextFunction, Request, Response } from "express";
 import { stellarService } from "./lib/stellar.js";
 import { createMeterRouter } from "./routes/meters.js";
@@ -44,6 +45,15 @@ app.use((_, res, next) => {
   next();
 });
 
+// Request timeout — configurable via REQUEST_TIMEOUT env var (default 15s)
+const requestTimeout = process.env.REQUEST_TIMEOUT ?? '15s';
+app.use(timeout(requestTimeout));
+
+// Halt middleware chain if request has already timed out
+app.use((req: any, _res: any, next: any) => {
+  if (!req.timedout) next();
+});
+
 app.use((req, _res, next) => {
   logger.info({ method: req.method, path: req.path });
   next();
@@ -58,6 +68,19 @@ app.get("/health", (_, res) => res.json({ status: "ok" }));
 app.get("/metrics", async (_req, res) => {
   res.set("Content-Type", register.contentType);
   res.end(await register.metrics());
+});
+
+// Timeout error handler — must come before the generic error handler
+app.use((err: any, req: any, res: any, next: any) => {
+  if (req.timedout) {
+    logger.error('Request timed out', {
+      method: req.method,
+      path: req.path,
+      timeout: requestTimeout,
+    });
+    return res.status(504).json({ error: 'Request timed out' });
+  }
+  next(err);
 });
 
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
