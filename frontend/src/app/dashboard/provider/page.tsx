@@ -21,6 +21,7 @@ export default function ProviderDashboardPage() {
   const [meterId, setMeterId] = useState("");
   const [ownerAddress, setOwnerAddress] = useState("");
   const [status, setStatus] = useState<Status>("idle");
+  const [deactivatingId, setDeactivatingId] = useState<string | null>(null);
   
   const [meters, setMeters] = useState<MeterData[]>([]);
   const [fetching, setFetching] = useState(false);
@@ -47,6 +48,35 @@ export default function ProviderDashboardPage() {
   useEffect(() => {
     fetchMeters();
   }, [fetchMeters]);
+
+  async function handleDeactivate(id: string) {
+    setDeactivatingId(id);
+    try {
+      const res = await fetch(`${API}/api/meters/${id}/deactivate`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Deactivation failed");
+
+      showToast({
+        variant: "success",
+        title: "Meter deactivated",
+        description: `${id} was deactivated successfully.`,
+        actionHref: `${EXPLORER_BASE}/${data.tx_hash}`,
+        actionLabel: "View transaction",
+      });
+      fetchMeters(); // Refresh list
+    } catch (err: unknown) {
+      showToast({
+        variant: "error",
+        title: "Deactivation failed",
+        description: err instanceof Error ? err.message : "Deactivation failed",
+      });
+    } finally {
+      setDeactivatingId(null);
+    }
+  }
 
   async function handleRegister(e: React.FormEvent) {
     e.preventDefault();
@@ -189,6 +219,7 @@ export default function ProviderDashboardPage() {
                     <th className="px-6 py-4 font-semibold">Plan</th>
                     <th className="px-6 py-4 font-semibold">Usage</th>
                     <th className="px-6 py-4 font-semibold">Expiry</th>
+                    <th className="px-6 py-4 font-semibold">Actions</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/5">
@@ -201,12 +232,13 @@ export default function ProviderDashboardPage() {
                           <td className="px-6 py-4"><Skeleton width="70px" height={14} /></td>
                           <td className="px-6 py-4"><Skeleton width="50px" height={14} /></td>
                           <td className="px-6 py-4"><Skeleton width="80px" height={14} /></td>
+                          <td className="px-6 py-4"><Skeleton width="80px" height={28} /></td>
                         </tr>
                       ))}
                     </>
                   ) : meters.length === 0 ? (
                     <tr>
-                      <td colSpan={5} className="px-6 py-12 text-center text-gray-500">
+                      <td colSpan={6} className="px-6 py-12 text-center text-gray-500">
                         No meters found.
                       </td>
                     </tr>
@@ -214,6 +246,7 @@ export default function ProviderDashboardPage() {
                     meters.map((m, i) => {
                       const expiresAt = Number(m.expires_at);
                       const isExpired = expiresAt !== Number.MAX_SAFE_INTEGER && expiresAt > 0 && Date.now() / 1000 >= expiresAt;
+                      const isActive = m.active && !isExpired;
                       
                       return (
                         <tr key={i} className="hover:bg-white/[0.02] transition">
@@ -222,10 +255,10 @@ export default function ProviderDashboardPage() {
                           </td>
                           <td className="px-6 py-4">
                             <span className={`inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[10px] font-bold uppercase ${
-                              m.active && !isExpired ? "bg-green-500/10 text-green-500" : "bg-red-500/10 text-red-500"
+                              isActive ? "bg-green-500/10 text-green-500" : "bg-red-500/10 text-red-500"
                             }`}>
-                              <span className={`h-1 w-1 rounded-full ${m.active && !isExpired ? "bg-green-500" : "bg-red-500"}`} />
-                              {m.active && !isExpired ? "Active" : "Inactive"}
+                              <span className={`h-1 w-1 rounded-full ${isActive ? "bg-green-500" : "bg-red-500"}`} />
+                              {isActive ? "Active" : "Inactive"}
                             </span>
                           </td>
                           <td className="px-6 py-4 text-xs font-medium">{m.plan}</td>
@@ -234,6 +267,17 @@ export default function ProviderDashboardPage() {
                           </td>
                           <td className="px-6 py-4 text-xs text-gray-400">
                             {expiresAt === Number.MAX_SAFE_INTEGER ? "Never" : new Date(expiresAt * 1000).toLocaleDateString()}
+                          </td>
+                          <td className="px-6 py-4">
+                            {isActive && (
+                              <button
+                                onClick={() => handleDeactivate(String(m.owner).slice(0, 12))}
+                                disabled={deactivatingId !== null}
+                                className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-1.5 text-xs font-semibold text-red-400 hover:bg-red-500/20 disabled:opacity-40 disabled:cursor-not-allowed transition"
+                              >
+                                {deactivatingId ? "Deactivating…" : "Deactivate"}
+                              </button>
+                            )}
                           </td>
                         </tr>
                       );
@@ -248,3 +292,4 @@ export default function ProviderDashboardPage() {
     </>
   );
 }
+

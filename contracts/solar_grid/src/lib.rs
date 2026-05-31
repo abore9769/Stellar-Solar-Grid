@@ -575,6 +575,30 @@ impl SolarGridContract {
         Ok(())
     }
 
+    /// Admin-only: immediately deactivate a meter (e.g. for non-paying
+    /// customers or faulty meters). Unlike `set_active`, this is a one-way
+    /// deactivation that doesn't require passing a boolean flag.
+    ///
+    /// Emits:
+    /// - `meter_deactivated { meter_id }`
+    pub fn deactivate_meter(env: Env, meter_id: Symbol) -> Result<(), ContractError> {
+        Self::require_admin(&env)?;
+        let key = DataKey::Meter(meter_id.clone());
+        let mut meter = Self::get_meter_or_error(&env, &key)?;
+        meter.active = false;
+        env.storage().persistent().set(&key, &meter);
+
+        env.events().publish(
+            (symbol_short!("access"), meter_id.clone()),
+            false,
+        );
+        env.events().publish(
+            (symbol_short!("mtr_deact"), EVT_NS, meter_id),
+            (),
+        );
+        Ok(())
+    }
+
     // ── Collaborator management ───────────────────────────────────────────────
 
     /// Add a collaborator with a share in basis points (100 = 1%).

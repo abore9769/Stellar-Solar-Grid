@@ -1,6 +1,6 @@
 import { Router } from "express";
 import * as StellarSdk from "@stellar/stellar-sdk";
-import { StellarService, stellarService } from "../lib/stellar.js";
+import { StellarService, stellarService, adminInvoke, contractQuery } from "../lib/stellar.js";
 import {
   getUsageHistory,
   persistAndSubmitUsageEvent,
@@ -52,6 +52,32 @@ meterRouter.get(
       StellarSdk.nativeToScVal(req.params.id, { type: "symbol" }),
     ]);
     res.json({ active: StellarSdk.scValToNative(result) });
+  }),
+);
+
+/** POST /api/meters/:id/deactivate — admin manually deactivates a meter */
+meterRouter.post(
+  "/:id/deactivate",
+  asyncHandler(async (req, res) => {
+    const meterId = req.params.id;
+
+    // Verify meter exists first
+    try {
+      await contractQuery("get_meter", [
+        StellarSdk.nativeToScVal(meterId, { type: "symbol" }),
+      ]);
+    } catch {
+      return res.status(404).json({ error: "Meter not found" });
+    }
+
+    try {
+      const txHash = await adminInvoke("deactivate_meter", [
+        StellarSdk.nativeToScVal(meterId, { type: "symbol" }),
+      ]);
+      res.json({ success: true, tx_hash: txHash, meter_id: meterId });
+    } catch (err: any) {
+      res.status(500).json({ error: err.message });
+    }
   }),
 );
 
