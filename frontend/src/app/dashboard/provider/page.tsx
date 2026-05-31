@@ -25,7 +25,7 @@ export default function ProviderDashboardPage() {
   const [meters, setMeters] = useState<MeterData[]>([]);
   const [fetching, setFetching] = useState(false);
 
-  const addressInvalid = ownerAddress.length > 0 && !isValidStellarAddress(ownerAddress);
+  const addressInvalid = ownerAddress.trim().length > 0 && !isValidStellarAddress(ownerAddress.trim());
 
   const EXPLORER_BASE = process.env.NEXT_PUBLIC_NETWORK_PASSPHRASE?.includes("Test")
     ? "https://stellar.expert/explorer/testnet/tx"
@@ -180,7 +180,7 @@ export default function ProviderDashboardPage() {
           </div>
 
           <div className="rounded-xl border border-white/10 bg-solar-accent overflow-hidden">
-            <div className="overflow-x-auto">
+            <div className="overflow-x-auto" style={{ WebkitOverflowScrolling: "touch" }}>
               <table className="w-full text-left text-sm text-gray-300">
                 <thead className="border-b border-white/10 bg-white/5 text-xs uppercase tracking-wider text-gray-400">
                   <tr>
