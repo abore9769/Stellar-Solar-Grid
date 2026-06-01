@@ -2,7 +2,8 @@ import "dotenv/config";
 import express from "express";
 import timeout from "connect-timeout";
 import { NextFunction, Request, Response } from "express";
-import { stellarService } from "./lib/stellar.js";
+import mqtt from "mqtt";
+import { stellarService, server } from "./lib/stellar.js";
 import { createMeterRouter } from "./routes/meters.js";
 import { paymentsRouter } from "./routes/payments.js";
 import { webhookRouter } from "./routes/webhooks.js";
@@ -63,7 +64,48 @@ app.use("/api/meters", createMeterRouter(stellarService));
 app.use("/api/payments", paymentsRouter);
 app.use("/api/webhooks", webhookRouter);
 
-app.get("/health", (_, res) => res.json({ status: "ok" }));
+app.get('/health', async (_req, res) => {
+  const checks: Record<string, string> = {};
+
+  // Check Stellar RPC
+  try {
+    await server.getLatestLedger();
+    checks.stellar = 'ok';
+  } catch (err) {
+    logger.error('Stellar health check failed', { err });
+    checks.stellar = 'error';
+  }
+
+  // Check MQTT by attempting a short-lived connection
+  const broker = process.env.MQTT_BROKER ?? 'mqtt://localhost:1883';
+  try {
+    const client = mqtt.connect(broker, { reconnectPeriod: 0, connectTimeout: 3000 });
+    const ok = await new Promise<boolean>((resolve) => {
+      const onConnect = () => {
+        client.end(true);
+        resolve(true);
+      };
+      const onError = () => {
+        client.end(true);
+        resolve(false);
+      };
+      const timer = setTimeout(() => {
+        client.end(true);
+        resolve(false);
+      }, 3000);
+
+      client.once('connect', () => { clearTimeout(timer); onConnect(); });
+      client.once('error', () => { clearTimeout(timer); onError(); });
+    });
+    checks.mqtt = ok ? 'ok' : 'error';
+  } catch (err) {
+    logger.error('MQTT health check failed', { err });
+    checks.mqtt = 'error';
+  }
+
+  const healthy = Object.values(checks).every((v) => v === 'ok');
+  res.status(healthy ? 200 : 503).json({ status: healthy ? 'ok' : 'degraded', checks });
+});
 
 app.get("/metrics", async (_req, res) => {
   res.set("Content-Type", register.contentType);
