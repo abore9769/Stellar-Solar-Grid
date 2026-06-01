@@ -7,12 +7,49 @@ import {
 } from "../lib/usageEvents.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
 import { validateRequest, RegisterMeterSchema } from "../lib/validation.js";
+import { requireAdminKey } from "../middleware/adminAuth.js";
 
 const balanceCache = new Map<string, { data: any; ts: number }>();
 const BALANCE_CACHE_TTL_MS = 5_000; // 5-second cache to reduce RPC load
 
 export function createMeterRouter(stellar: StellarService) {
   const meterRouter = Router();
+
+  /**
+   * GET /api/meters?page=1&pageSize=25 — list all meters with pagination
+   *
+   * Registered BEFORE /:id so the literal string "meters" is never matched
+   * as a meter ID parameter.
+   *
+   * Fixes #268.
+   */
+  meterRouter.get(
+    "/",
+    asyncHandler(async (req, res) => {
+      const page = Math.max(1, Number(req.query.page ?? 1) || 1);
+      const pageSize = Math.min(
+        100,
+        Math.max(1, Number(req.query.pageSize ?? 25) || 25),
+      );
+
+      const result = await stellar.query("get_all_meters", []);
+      const allMeters = (StellarSdk.scValToNative(result) as any[]) ?? [];
+
+      const total = allMeters.length;
+      const start = (page - 1) * pageSize;
+      const meters = allMeters.slice(start, start + pageSize);
+
+      res.json({
+        meters,
+        pagination: {
+          page,
+          pageSize,
+          total,
+          pages: Math.ceil(total / pageSize),
+        },
+      });
+    }),
+  );
 
   /** GET /api/meters/export?format=csv|json — download all meter data */
   meterRouter.get(
@@ -62,6 +99,7 @@ export function createMeterRouter(stellar: StellarService) {
   /** POST /api/meters/:id/deactivate — admin manually deactivates a meter */
   meterRouter.post(
     "/:id/deactivate",
+    requireAdminKey,
     asyncHandler(async (req, res) => {
       const meterId = req.params.id;
 
@@ -146,6 +184,7 @@ export function createMeterRouter(stellar: StellarService) {
   /** POST /api/meters — register a new meter (admin only) */
   meterRouter.post(
     "/",
+    requireAdminKey,
     validateRequest({ body: RegisterMeterSchema }),
     asyncHandler(async (req, res) => {
       const { meter_id, owner } = req.body;
@@ -159,7 +198,7 @@ export function createMeterRouter(stellar: StellarService) {
   );
 
   /** POST /api/meters/:id/usage — IoT oracle reports usage */
-  meterRouter.post("/:id/usage", async (req, res) => {
+  meterRouter.post("/:id/usage", requireAdminKey, async (req, res) => {
     const { units, cost } = req.body as { units: unknown; cost: unknown };
 
     if (units == null || cost == null) {
@@ -202,5 +241,3 @@ export function createMeterRouter(stellar: StellarService) {
   return meterRouter;
 }
 
-// Default export for back-compat with index.ts
-export const meterRouter = createMeterRouter(stellarService);
