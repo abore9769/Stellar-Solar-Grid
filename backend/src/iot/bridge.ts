@@ -89,6 +89,60 @@ function encodeBatch(readings: Reading[]): StellarSdk.xdr.ScVal {
   return StellarSdk.xdr.ScVal.scvVec(entries);
 }
 
+export async function processMqttMessage(topic: string, payload: Buffer) {
+  const meterId = topic.split("/")[2];
+  const rawStr = payload.toString();
+
+  let raw: unknown;
+  try {
+    raw = JSON.parse(rawStr);
+  } catch (err) {
+    // Include the raw payload to aid debugging; do not rethrow so the bridge keeps running
+    logger.error('Malformed MQTT payload, skipping', { topic, raw: rawStr, err });
+    return;
+  }
+
+  const parsed = UsageUpdateSchema.safeParse(raw);
+  if (!parsed.success) {
+    logger.error("Invalid MQTT payload (schema validation failed)", {
+      topic,
+      raw: rawStr,
+      errors: parsed.error.flatten().fieldErrors,
+    });
+    return;
+  }
+
+  const { units, cost } = parsed.data;
+
+  logger.info("Usage update received from IoT bridge", {
+    meterId,
+    units,
+    cost,
+  });
+
+  const event = await persistAndSubmitUsageEvent({
+    meterId,
+    units,
+    cost,
+    sourceTopic: topic,
+  });
+
+  if (event.on_chain_tx_hash) {
+    logger.info("Usage recorded on-chain", {
+      meterId,
+      eventId: event.id,
+      txHash: event.on_chain_tx_hash,
+    });
+    // Check if balance is low after usage update
+    checkAndNotifyLowBalance(meterId);
+  } else {
+    logger.warn("Usage event queued for retry", {
+      meterId,
+      eventId: event.id,
+    });
+  }
+}
+
 export function startIoTBridge() {
   startMqttBridge();
   startContractEventListener();
@@ -156,55 +210,10 @@ function startMqttBridge() {
   client.on("message", async (topic, payload) => {
     mqttMessages.inc();
     try {
-      const meterId = topic.split("/")[2];
-
-      let raw: unknown;
-      try {
-        raw = JSON.parse(payload.toString());
-      } catch (err) {
-        logger.error("Invalid MQTT payload (not JSON)", { topic, err });
-        return;
-      }
-
-      const parsed = UsageUpdateSchema.safeParse(raw);
-      if (!parsed.success) {
-        logger.error("Invalid MQTT payload (schema validation failed)", {
-          topic,
-          errors: parsed.error.flatten().fieldErrors,
-        });
-        return;
-      }
-      const { units, cost } = parsed.data;
-
-      logger.info("Usage update received from IoT bridge", {
-        meterId,
-        units,
-        cost,
-      });
-
-      const event = await persistAndSubmitUsageEvent({
-        meterId,
-        units,
-        cost,
-        sourceTopic: topic,
-      });
-
-      if (event.on_chain_tx_hash) {
-        logger.info("Usage recorded on-chain", {
-          meterId,
-          eventId: event.id,
-          txHash: event.on_chain_tx_hash,
-        });
-        // Check if balance is low after usage update
-        checkAndNotifyLowBalance(meterId);
-      } else {
-        logger.warn("Usage event queued for retry", {
-          meterId,
-          eventId: event.id,
-        });
-      }
+      await processMqttMessage(topic as string, payload as Buffer);
     } catch (err) {
-      logger.error("IoT bridge parse error", { err });
+      // Catch any unexpected errors from processing to ensure the bridge keeps running
+      logger.error("Unhandled error in MQTT message handler", { topic, raw: payload.toString(), err });
     }
   });
 
