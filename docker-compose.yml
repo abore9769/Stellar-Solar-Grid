@@ -1,0 +1,72 @@
+version: "3.8"
+
+services:
+  env-check:
+    image: alpine
+    environment:
+      - CONTRACT_ID=${CONTRACT_ID}
+      - ADMIN_SECRET_KEY=${ADMIN_SECRET_KEY}
+      - VITE_CONTRACT_ID=${VITE_CONTRACT_ID}
+    command: >
+      sh -c '
+      failed=0;
+      for var in CONTRACT_ID ADMIN_SECRET_KEY VITE_CONTRACT_ID; do
+        eval val=\$$var
+        if [ -z "$val" ] || [ "$val" = "YOUR_CONTRACT_ID_HERE" ] || [ "$val" = "YOUR_ADMIN_SECRET_KEY_HERE" ]; then
+          echo "ERROR: Required environment variable $$var is not set, is empty, or has placeholder value."
+          failed=1
+        fi
+      done;
+      if [ "$failed" -ne 0 ]; then
+        exit 1
+      fi;
+      echo "All required environment variables are set."
+      '
+
+  mqtt:
+    image: eclipse-mosquitto:2
+    ports:
+      - "1883:1883"
+      - "9001:9001"
+    volumes:
+      - ./mosquitto.conf:/mosquitto/config/mosquitto.conf
+    networks:
+      - app-network
+
+  backend:
+    build: ./backend
+    ports:
+      - "3001:3001"
+    environment:
+      - MQTT_BROKER=mqtt://mqtt:1883
+      - STELLAR_NETWORK=testnet
+      - CONTRACT_ID=${CONTRACT_ID}
+      - ADMIN_SECRET_KEY=${ADMIN_SECRET_KEY}
+    env_file:
+      - ./backend/.env
+    depends_on:
+      mqtt:
+        condition: service_started
+      env-check:
+        condition: service_completed_successfully
+    networks:
+      - app-network
+
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        - VITE_CONTRACT_ID=${VITE_CONTRACT_ID}
+        - VITE_BACKEND_URL=${VITE_BACKEND_URL}
+        - VITE_RPC_URL=${VITE_RPC_URL}
+        - VITE_NETWORK_PASSPHRASE=${VITE_NETWORK_PASSPHRASE}
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - app-network
+
+networks:
+  app-network:
+    driver: bridge

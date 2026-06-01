@@ -1,6 +1,8 @@
 import { Router } from "express";
 import * as StellarSdk from "@stellar/stellar-sdk";
 import { server, CONTRACT_ID, NETWORK_PASSPHRASE } from "../lib/stellar.js";
+import { logger } from "../lib/logger.js";
+import { asyncHandler } from "../lib/asyncHandler.js";
 
 export const paymentsRouter = Router();
 
@@ -25,19 +27,28 @@ export interface PaymentRecord {
  * Queries Soroban contract events for make_payment calls where payer === address.
  * Falls back to Horizon transaction history when events are unavailable.
  */
-paymentsRouter.get("/:address", async (req, res) => {
-  const { address } = req.params;
-  const page = Math.max(1, parseInt((req.query.page as string) ?? "1", 10));
-  const limit = Math.min(50, Math.max(1, parseInt((req.query.limit as string) ?? "10", 10)));
-  const sort = req.query.sort === "asc" ? "asc" : "desc";
+paymentsRouter.get(
+  "/:address",
+  asyncHandler(async (req, res) => {
+    const rawAddress = req.params.address;
+    const address = Array.isArray(rawAddress) ? rawAddress[0] : rawAddress;
+    if (typeof address !== "string" || address.trim().length === 0) {
+      return res.status(400).json({ error: "Invalid Stellar address" });
+    }
 
-  try {
-    StellarSdk.StrKey.decodeEd25519PublicKey(address);
-  } catch {
-    return res.status(400).json({ error: "Invalid Stellar address" });
-  }
+    const page = Math.max(1, parseInt((req.query.page as string) ?? "1", 10));
+    const limit = Math.min(
+      50,
+      Math.max(1, parseInt((req.query.limit as string) ?? "10", 10)),
+    );
+    const sort = req.query.sort === "asc" ? "asc" : "desc";
 
-  try {
+    try {
+      StellarSdk.StrKey.decodeEd25519PublicKey(address);
+    } catch {
+      return res.status(400).json({ error: "Invalid Stellar address" });
+    }
+
     const records = await fetchPaymentEvents(address, sort);
     const total = records.length;
     const start = (page - 1) * limit;
@@ -51,12 +62,14 @@ paymentsRouter.get("/:address", async (req, res) => {
     return res.status(500).json({ error: err.message ?? "Failed to fetch payment history" });
   }
 });
+  }),
+);
 
 // ── Helpers ───────────────────────────────────────────────────────────────────
 
 async function fetchPaymentEvents(
   address: string,
-  sort: "asc" | "desc"
+  sort: "asc" | "desc",
 ): Promise<PaymentRecord[]> {
   // Query Soroban RPC for contract events
   // Events follow (EVT_NS, action, subject) pattern; filter on namespace + action
@@ -98,17 +111,31 @@ async function fetchPaymentEvents(
   return events;
 }
 
-function parsePaymentEvent(event: any, filterAddress: string): PaymentRecord | null {
+function parsePaymentEvent(
+  event: any,
+  filterAddress: string,
+): PaymentRecord | null {
   // Contract events emitted by make_payment have topics:
   // (EVT_NS, "payment", meter_id) and data: (payer, token_address, amount, plan)
   const topics: StellarSdk.xdr.ScVal[] = (event.topic ?? []).map((t: string) =>
-    StellarSdk.xdr.ScVal.fromXDR(t, "base64")
+    StellarSdk.xdr.ScVal.fromXDR(t, "base64"),
   );
 
   if (topics.length < 3) return null;
 
   // topics[0] = namespace, topics[1] = action, topics[2] = meter_id (subject)
   const meterVal = topics[2];
+  const payerVal = topics[2];
+  const payer =
+    payerVal.switch().name === "scvAddress"
+      ? StellarSdk.StrKey.encodeEd25519PublicKey(
+          payerVal.address().accountId().ed25519(),
+        )
+      : null;
+
+  if (!payer || payer !== filterAddress) return null;
+
+  const meterVal = topics[1];
   const meterId =
     meterVal.switch().name === "scvSymbol"
       ? meterVal.sym().toString()

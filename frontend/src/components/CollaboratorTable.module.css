@@ -1,0 +1,12 @@
+.emptyMessage {
+  color: var(--text-secondary, #9ca3af);
+}
+
+.shareCell {
+  text-align: right;
+}
+
+.shareLabel {
+  font-weight: 500;
+  color: var(--text-primary, #ffffff);
+}

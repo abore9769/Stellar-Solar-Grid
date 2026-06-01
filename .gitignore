@@ -4,3 +4,6 @@ target/
 .env
 *.wasm
 .DS_Store
+logs/
+data/*.db
+data/*.sqlite
