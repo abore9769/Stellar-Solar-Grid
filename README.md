@@ -112,7 +112,7 @@ You can spin up the infrastructure (MQTT broker and the backend service) using D
    ```bash
    cp .env.example .env
    ```
-2. Populate the `.env` file with your `CONTRACT_ID`, `ADMIN_SECRET_KEY`, and `VITE_CONTRACT_ID`.
+2. Populate the `.env` file — at minimum set `CONTRACT_ID`, `ADMIN_SECRET_KEY`, `ADMIN_ADDRESS`, and `VITE_CONTRACT_ID`. Every variable is documented with an inline comment in `.env.example`.
 3. Start the services:
    ```bash
    docker compose up --build

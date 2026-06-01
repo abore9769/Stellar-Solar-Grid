@@ -32,6 +32,12 @@ services:
       - ./mosquitto.conf:/mosquitto/config/mosquitto.conf
     networks:
       - app-network
+    healthcheck:
+      test: [CMD, mosquitto_sub, -t, $$SYS/#, -C, 1, -i, hc, -W, 3]
+      interval: 10s
+      timeout: 5s
+      retries: 3
+      start_period: 5s
 
   backend:
     build: ./backend
@@ -46,11 +52,17 @@ services:
       - ./backend/.env
     depends_on:
       mqtt:
-        condition: service_started
+        condition: service_healthy
       env-check:
         condition: service_completed_successfully
     networks:
       - app-network
+    healthcheck:
+      test: [CMD, wget, -qO-, http://localhost:3001/health]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+      start_period: 10s
 
 networks:
   app-network:

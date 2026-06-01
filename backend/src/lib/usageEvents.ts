@@ -3,12 +3,16 @@ import path from "node:path";
 import Database from "better-sqlite3";
 import * as StellarSdk from "@stellar/stellar-sdk";
 import { adminInvoke } from "./stellar.js";
+import { logger } from "./logger.js";
 
 const DB_PATH =
   process.env.USAGE_EVENTS_DB_PATH ??
   path.resolve(process.cwd(), "data", "usage-events.sqlite");
-const RETRY_INTERVAL_MS = Number(process.env.USAGE_RETRY_INTERVAL_MS ?? 10_000);
-const MAX_RETRIES = 3;
+const RETRY_INTERVAL_MS = Number(
+  process.env.RETRY_INTERVAL_MS ?? process.env.USAGE_RETRY_INTERVAL_MS ?? 30_000,
+);
+const MAX_RETRY_ATTEMPTS = Number(process.env.MAX_RETRY_ATTEMPTS ?? 5);
+const MAX_RETRIES = MAX_RETRY_ATTEMPTS;
 
 type UsageEventStatus = "pending" | "submitted" | "failed";
 
@@ -193,6 +197,7 @@ export function startUsageEventRetryWorker() {
     return;
   }
 
+  logger.info('Usage event retry worker started', { intervalMs: RETRY_INTERVAL_MS, maxRetryAttempts: MAX_RETRY_ATTEMPTS });
   retryTimer = setInterval(() => {
     void retryQueuedUsageEvents();
   }, RETRY_INTERVAL_MS);
@@ -271,6 +276,10 @@ async function submitUsageEvent(id: number) {
     const nextAttemptCount = event.attempt_count + 1;
     const finalStatus: UsageEventStatus =
       nextAttemptCount >= MAX_RETRIES ? "failed" : "pending";
+
+    if (finalStatus === "failed") {
+      logger.warn({ eventId: id, meterId: event.meter_id, attempts: nextAttemptCount }, 'Usage event dead-lettered after max retries');
+    }
 
     db.prepare(
       `
