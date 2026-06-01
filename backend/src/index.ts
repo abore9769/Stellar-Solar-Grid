@@ -9,6 +9,7 @@ import { paymentsRouter } from "./routes/payments.js";
 import { webhookRouter } from "./routes/webhooks.js";
 import { startIoTBridge } from "./iot/bridge.js";
 import { logger } from "./lib/logger.js";
+import { register } from "./lib/metrics.js";
 import {
   initUsageEventStore,
   startUsageEventRetryWorker,
@@ -24,8 +25,8 @@ const REQUIRED_ENV = [
 
 const missing = REQUIRED_ENV.filter(k => !process.env[k]);
 if (missing.length > 0) {
-  console.error('Missing required environment variables:', missing.join(', '));
-  console.error('Copy backend/.env.example to backend/.env and fill in the values.');
+  logger.error('Missing required environment variables: ' + missing.join(', '));
+  logger.error('Copy backend/.env.example to backend/.env and fill in the values.');
   process.exit(1);
 }
 
@@ -150,5 +151,7 @@ app.listen(PORT, () => {
   initUsageEventStore();
   startUsageEventRetryWorker();
   logger.info("SolarGrid backend listening", { port: PORT });
-  startIoTBridge();
+  startIoTBridge().catch(err => {
+    logger.error("Failed to start IoT bridge", { err });
+  });
 });

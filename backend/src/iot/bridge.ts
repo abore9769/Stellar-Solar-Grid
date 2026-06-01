@@ -192,7 +192,9 @@ function startMqttBridge() {
           txHash: event.on_chain_tx_hash,
         });
         // Check if balance is low after usage update
-        checkAndNotifyLowBalance(meterId);
+        checkAndNotifyLowBalance(meterId).catch(err => {
+          logger.error("Low balance check failed", { err });
+        });
       } else {
         logger.warn("Usage event queued for retry", {
           meterId,

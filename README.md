@@ -82,6 +82,8 @@ cargo build --target wasm32-unknown-unknown --release
 stellar contract deploy --wasm target/wasm32-unknown-unknown/release/solar_grid.wasm --network testnet
 ```
 
+Current WASM binary size: ~85 KB (must remain under 100 KB as verified by contract CI).
+
 Deployment guidance:
 - Prefer setting `admin` and `token_address` through the contract constructor at deploy time so initialization is atomic.
 - If you must call `initialize`, do it in the same transaction flow as deployment. Leaving the contract uninitialized after deploy creates a front-running risk where another caller can initialize first.
@@ -119,6 +121,17 @@ You can spin up the infrastructure (MQTT broker and the backend service) using D
    ```
 
 The `env-check` service validates that all required environment variables are correctly populated before the backend starts up, preventing silent configuration errors.
+
+### Observability
+
+You can run the Prometheus and Grafana observability stack alongside the backend and MQTT services using the `observability` profile:
+
+```bash
+docker compose --profile observability up --build
+```
+
+- **Prometheus** scrapes the backend metrics (`/metrics`) every 15 seconds, and is accessible at `http://localhost:9090`.
+- **Grafana** is preconfigured with the Prometheus datasource and is accessible at `http://localhost:3000` (default credentials: `admin` / `admin`). It features dashboard panels for MQTT messages/min, contract calls by method/status, and error rates.
 
 ## Smart Contract Overview
 
