@@ -74,39 +74,37 @@ For local development setup and contributing guidelines, please refer to the [Co
 - Node.js >= 18
 - [Freighter Wallet](https://freighter.app/) (browser extension)
 
-### Smart Contracts
+### Development with Makefile
+
+A Makefile is provided at the repository root to simplify common development and smart contract deployment/invocation commands:
+
+- **Build contracts**: `make build` compiles the contracts into WASM.
+- **Run tests**: `make test` executes Cargo tests in the contracts folder.
+- **Clean builds**: `make clean` runs `cargo clean` inside the contracts directory.
+- **Deploy contract**: `make deploy NETWORK=testnet ADMIN_SECRET_KEY=<key>` deploys the built contract WASM to the specified network.
+- **Invoke functions**:
+  - `make invoke-register CONTRACT_ID=<id> ADMIN_SECRET_KEY=<key> METER_ID=<meter_id> OWNER=<owner>` registers a new meter.
+  - `make invoke-allowlist CONTRACT_ID=<id> ADMIN_SECRET_KEY=<key> OWNER=<owner>` adds an owner to the allowlist.
+- **Backend Logs**: `make logs` streams Docker Compose logs for the backend.
+
+### Smart Contracts Deployment CI/CD
+
+Contract deployments to the Stellar Testnet are automated via GitHub Actions:
+- To trigger a deployment, push a git tag matching the pattern `contract-v*` (e.g., `git tag contract-v1.0.0 && git push origin contract-v1.0.0`).
+- The workflow compiles the contract, installs Stellar CLI, and deploys it to the testnet using the `ADMIN_SECRET_KEY` secret.
+- The new contract ID is printed as an output of the workflow.
+
+### Running with Docker Compose and GHCR Images
+
+You can pull and run the backend and frontend Docker images built automatically on pushes to `main` and release tags (`v*`):
 
 ```bash
-cd contracts
-cargo build --target wasm32-unknown-unknown --release
-stellar contract deploy --wasm target/wasm32-unknown-unknown/release/solar_grid.wasm --network testnet
+docker pull ghcr.io/OWNER/solargrid-backend:latest
+docker pull ghcr.io/OWNER/solargrid-frontend:latest
 ```
+(Replace `OWNER` with the GitHub organization or username).
 
-Deployment guidance:
-- Prefer setting `admin` and `token_address` through the contract constructor at deploy time so initialization is atomic.
-- If you must call `initialize`, do it in the same transaction flow as deployment. Leaving the contract uninitialized after deploy creates a front-running risk where another caller can initialize first.
-
-### Frontend
-
-```bash
-cd frontend
-npm install
-npm run dev
-```
-
-### Backend
-
-```bash
-cd backend
-npm install
-npm run dev
-```
-
-The backend stores IoT usage events in a local SQLite database at `backend/data/usage-events.sqlite` by default. Set `USAGE_EVENTS_DB_PATH` to override the file location.
-
-### Running with Docker Compose
-
-You can spin up the infrastructure (MQTT broker and the backend service) using Docker Compose:
+You can spin up the local infrastructure (MQTT broker and the backend service) using Docker Compose:
 
 1. Copy the environment template at the repository root:
    ```bash

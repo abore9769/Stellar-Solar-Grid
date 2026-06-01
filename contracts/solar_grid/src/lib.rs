@@ -24,6 +24,7 @@ pub enum ContractError {
     InsufficientBalance = 12,
     CollaboratorAlreadyExists = 13,
     DailyLimitReached = 14,
+    MeterNotActive = 15,
 }
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
@@ -428,22 +429,23 @@ impl SolarGridContract {
         Ok(())
     }
 
-    pub fn admin_withdraw(env: Env, admin: Address, amount: i128) {
+    pub fn admin_withdraw(env: Env, admin: Address, amount: i128) -> Result<(), ContractError> {
         admin.require_auth();
         // Verify admin matches stored admin address
-        let stored_admin: Address = env.storage().instance().get(&symbol_short!("ADMIN")).expect("admin not set");
+        let stored_admin: Address = Self::get_admin(&env)?;
         if admin != stored_admin {
-            panic!("unauthorized");
+            return Err(ContractError::Unauthorized);
         }
         // Transfer XLM from contract to admin
-        let token_address = Self::get_token_address(&env).expect("token not set");
+        let token_address = Self::get_token_address(&env)?;
         let token_client = token::Client::new(&env, &token_address);
         let contract_balance = token_client.balance(&env.current_contract_address());
         if amount > contract_balance {
-            panic!("insufficient balance");
+            return Err(ContractError::InsufficientBalance);
         }
         token_client.transfer(&env.current_contract_address(), &admin, &amount);
         env.events().publish(("admin", "withdraw"), (admin.clone(), amount));
+        Ok(())
     }
 
     /// Get currently tracked provider revenue balance.
@@ -486,7 +488,7 @@ impl SolarGridContract {
         let mut meter = Self::get_meter_or_error(&env, &key)?;
 
         if !meter.active {
-            panic!("meter is not active");
+            return Err(ContractError::MeterNotActive);
         }
 
         // Daily spending limit: reset window if 24 h has elapsed, then enforce cap.

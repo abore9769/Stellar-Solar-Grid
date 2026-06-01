@@ -44,6 +44,11 @@ function openDatabase() {
   const database = new Database(DB_PATH);
   database.pragma("journal_mode = WAL");
   database.exec(`
+    CREATE TABLE IF NOT EXISTS kv (
+      key   TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
+
     CREATE TABLE IF NOT EXISTS usage_events (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       meter_id TEXT NOT NULL,
@@ -70,6 +75,15 @@ function openDatabase() {
 
 export function initUsageEventStore() {
   return db;
+}
+
+export function getKV(key: string): string | null {
+  const row = db.prepare('SELECT value FROM kv WHERE key = ?').get(key) as any;
+  return row?.value ?? null;
+}
+
+export function setKV(key: string, value: string) {
+  db.prepare('INSERT OR REPLACE INTO kv (key, value) VALUES (?, ?)').run(key, value);
 }
 
 export function recordUsageEvent(input: CreateUsageEventInput): UsageEventRecord {

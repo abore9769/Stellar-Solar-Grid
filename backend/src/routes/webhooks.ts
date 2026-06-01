@@ -1,7 +1,7 @@
 import { Router } from "express";
 import * as crypto from "crypto";
 import * as StellarSdk from "@stellar/stellar-sdk";
-import { adminInvoke, contractQuery } from "../lib/stellar.js";
+import { adminInvoke } from "../lib/stellar.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
 import { validateRequest } from "../lib/validation.js";
 import { logger } from "../lib/logger.js";

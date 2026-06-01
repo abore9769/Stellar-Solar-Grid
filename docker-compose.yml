@@ -52,6 +52,21 @@ services:
     networks:
       - app-network
 
+  frontend:
+    build:
+      context: ./frontend
+      args:
+        - VITE_CONTRACT_ID=${VITE_CONTRACT_ID}
+        - VITE_BACKEND_URL=${VITE_BACKEND_URL}
+        - VITE_RPC_URL=${VITE_RPC_URL}
+        - VITE_NETWORK_PASSPHRASE=${VITE_NETWORK_PASSPHRASE}
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+    networks:
+      - app-network
+
 networks:
   app-network:
     driver: bridge
