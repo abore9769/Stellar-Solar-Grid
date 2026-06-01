@@ -234,10 +234,7 @@ impl SolarGridContract {
         env.storage().instance().set(&METER_LIST, &global_list);
 
         // meter_registered
-        env.events().publish(
-            (symbol_short!("mtr_reg"), EVT_NS, meter_id),
-            owner,
-        );
+        env.events().publish(("meter", "registered"), (meter_id.clone(), owner.clone()));
         Ok(())
     }
 
@@ -375,10 +372,8 @@ impl SolarGridContract {
             .set(&provider_key, &provider_revenue.saturating_add(amount));
 
         // payment_received
-        env.events().publish(
-            (symbol_short!("payment"), meter_id.clone()),
-            (payer, amount),
-        );
+        // payment_received
+        env.events().publish(("meter", "payment"), (meter_id.clone(), amount, plan));
         // meter_activated
         env.events().publish(
             (symbol_short!("mtr_actv"), EVT_NS, meter_id),
@@ -433,6 +428,24 @@ impl SolarGridContract {
         Ok(())
     }
 
+    pub fn admin_withdraw(env: Env, admin: Address, amount: i128) {
+        admin.require_auth();
+        // Verify admin matches stored admin address
+        let stored_admin: Address = env.storage().instance().get(&symbol_short!("ADMIN")).expect("admin not set");
+        if admin != stored_admin {
+            panic!("unauthorized");
+        }
+        // Transfer XLM from contract to admin
+        let token_address = Self::get_token_address(&env).expect("token not set");
+        let token_client = token::Client::new(&env, &token_address);
+        let contract_balance = token_client.balance(&env.current_contract_address());
+        if amount > contract_balance {
+            panic!("insufficient balance");
+        }
+        token_client.transfer(&env.current_contract_address(), &admin, &amount);
+        env.events().publish(("admin", "withdraw"), (admin.clone(), amount));
+    }
+
     /// Get currently tracked provider revenue balance.
     pub fn get_provider_revenue(env: Env, provider: Address) -> Result<i128, ContractError> {
         Self::require_initialized(&env)?;
@@ -472,6 +485,10 @@ impl SolarGridContract {
         let key = DataKey::Meter(meter_id.clone());
         let mut meter = Self::get_meter_or_error(&env, &key)?;
 
+        if !meter.active {
+            panic!("meter is not active");
+        }
+
         // Daily spending limit: reset window if 24 h has elapsed, then enforce cap.
         let now = env.ledger().timestamp();
         if now.saturating_sub(meter.day_start) > SECONDS_PER_DAY {
@@ -497,10 +514,8 @@ impl SolarGridContract {
         env.storage().persistent().set(&key, &meter);
 
         // usage_updated
-        env.events().publish(
-            (symbol_short!("usage"), meter_id.clone()),
-            (units, cost),
-        );
+        // usage_updated
+        env.events().publish(("meter", "usage"), (meter_id.clone(), units, cost));
         // meter_deactivated — only when balance drained to zero
         if deactivated {
             env.events().publish(
@@ -525,6 +540,8 @@ impl SolarGridContract {
     }
 
     /// Get meter details.
+    pub fn get_meter(env: Env, meter_id: Symbol) -> Option<Meter> {
+        env.storage().persistent().get(&DataKey::Meter(meter_id))
     pub fn get_meter(env: Env, meter_id: String) -> Result<Meter, ContractError> {
         let key = DataKey::Meter(meter_id);
         Self::get_meter_or_error(&env, &key)
@@ -1000,6 +1017,22 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "meter is not active")]
+    fn test_update_usage_panics_if_meter_inactive() {
+        let (env, client, _admin, token_address) = setup_with_token();
+        let token_admin_client = token::StellarAssetClient::new(&env, &token_address);
+        setup_oracle(&env, &client);
+
+        let user = Address::generate(&env);
+        let meter_id = symbol_short!("INACT");
+
+        allowlist_and_register(&client, &meter_id, &user);
+        
+        // Meter is registered but no payment made, so it's inactive
+        client.update_usage(&meter_id, &50_u64, &100_000_i128);
+    }
+
+    #[test]
     fn test_update_usage_huge_cost_clamps_to_zero() {
         let (env, client, _admin, token_address) = setup_with_token();
         let token_admin_client = token::StellarAssetClient::new(&env, &token_address);
@@ -1207,6 +1240,40 @@ mod tests {
     }
 
     #[test]
+    fn test_admin_withdraw_authorized() {
+        let (env, client, admin, token_address) = setup_with_token();
+        let token_admin_client = token::StellarAssetClient::new(&env, &token_address);
+        let token_client = token::Client::new(&env, &token_address);
+        
+        token_admin_client.mint(&client.address, &1000_i128);
+        client.admin_withdraw(&admin, &500_i128);
+        
+        assert_eq!(token_client.balance(&admin), 500_i128);
+        assert_eq!(token_client.balance(&client.address), 500_i128);
+    }
+
+    #[test]
+    #[should_panic(expected = "unauthorized")]
+    fn test_admin_withdraw_unauthorized() {
+        let (env, client, _admin, token_address) = setup_with_token();
+        let token_admin_client = token::StellarAssetClient::new(&env, &token_address);
+        
+        token_admin_client.mint(&client.address, &1000_i128);
+        let fake_admin = Address::generate(&env);
+        client.admin_withdraw(&fake_admin, &500_i128);
+    }
+
+    #[test]
+    #[should_panic(expected = "insufficient balance")]
+    fn test_admin_withdraw_insufficient_balance() {
+        let (env, client, admin, token_address) = setup_with_token();
+        let token_admin_client = token::StellarAssetClient::new(&env, &token_address);
+        
+        token_admin_client.mint(&client.address, &500_i128);
+        client.admin_withdraw(&admin, &1000_i128);
+    }
+
+    #[test]
     fn test_update_usage_exact_balance_deactivates_meter() {
         let (env, client, _admin, token_address) = setup_with_token();
         let token_admin_client = token::StellarAssetClient::new(&env, &token_address);
@@ -1250,10 +1317,10 @@ mod tests {
         let events = env.events().all();
         let found = events.iter().any(|(_, topics, _)| {
             topics.len() >= 2
-                && topics.get(0).map(|v| sym_eq(&env, &v, symbol_short!("mtr_reg"))).unwrap_or(false)
-                && topics.get(1).map(|v| sym_eq(&env, &v, EVT_NS)).unwrap_or(false)
+                && topics.get(0).map(|v| sym_eq(&env, &v, Symbol::new(&env, "meter"))).unwrap_or(false)
+                && topics.get(1).map(|v| sym_eq(&env, &v, Symbol::new(&env, "registered"))).unwrap_or(false)
         });
-        assert!(found, "mtr_reg event not emitted");
+        assert!(found, "meter registered event not emitted");
     }
 
     #[test]
@@ -1269,7 +1336,8 @@ mod tests {
 
         let events = env.events().all();
         let has_pmt = events.iter().any(|(_, topics, _)| {
-            topics.get(0).map(|v| sym_eq(&env, &v, symbol_short!("payment"))).unwrap_or(false)
+            topics.get(0).map(|v| sym_eq(&env, &v, Symbol::new(&env, "meter"))).unwrap_or(false)
+                && topics.get(1).map(|v| sym_eq(&env, &v, Symbol::new(&env, "payment"))).unwrap_or(false)
         });
         let has_actv = events.iter().any(|(_, topics, _)| {
             topics.get(0).map(|v| sym_eq(&env, &v, symbol_short!("mtr_actv"))).unwrap_or(false)
@@ -1294,7 +1362,8 @@ mod tests {
 
         let events = env.events().all();
         let has_usg = events.iter().any(|(_, topics, _)| {
-            topics.get(0).map(|v| sym_eq(&env, &v, symbol_short!("usage"))).unwrap_or(false)
+            topics.get(0).map(|v| sym_eq(&env, &v, Symbol::new(&env, "meter"))).unwrap_or(false)
+                && topics.get(1).map(|v| sym_eq(&env, &v, Symbol::new(&env, "usage"))).unwrap_or(false)
         });
         let has_deact = events.iter().any(|(_, topics, _)| {
             topics.get(0).map(|v| sym_eq(&env, &v, symbol_short!("mtr_deact"))).unwrap_or(false)
@@ -1595,7 +1664,7 @@ mod tests {
 
         client.update_usage(&meter_id, &5_u64, &200_i128);
         assert_eq!(client.get_meter_balance(&meter_id), 800);
-        assert_eq!(client.get_meter(&meter_id).units_used, 5);
+        assert_eq!(client.get_meter(&meter_id).unwrap().units_used, 5);
     }
 
     /// batch_update_usage panics with OracleNotSet when no oracle is registered.
@@ -1607,6 +1676,25 @@ mod tests {
 
         let result = client.try_batch_update_usage(&vec![&env, (meter_id.clone(), 1_u64, 100_i128)]);
         assert_eq!(result, Err(Ok(ContractError::OracleNotSet)));
+    }
+
+    #[test]
+    fn test_get_meter_existing_and_missing() {
+        let (env, client, _admin) = setup();
+        let user = Address::generate(&env);
+        let meter_id = symbol_short!("EXISTING");
+        
+        allowlist_and_register(&client, &meter_id, &user);
+        
+        // Existing meter should return Some
+        let existing = client.get_meter(&meter_id);
+        assert!(existing.is_some());
+        assert_eq!(existing.unwrap().owner, user);
+
+        // Missing meter should return None
+        let missing_id = symbol_short!("MISSING");
+        let missing = client.get_meter(&missing_id);
+        assert!(missing.is_none());
     }
 
     // ── NotInitialized guard tests ────────────────────────────────────────────
