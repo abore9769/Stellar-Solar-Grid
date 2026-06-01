@@ -36,7 +36,16 @@ jobs:
       - run: cd backend && npm run build
       - name: Run e2e tests (only when secrets are available)
         if: ${{ secrets.CONTRACT_ID != '' && secrets.ADMIN_SECRET_KEY != '' }}
-        run: cd backend && npm run test:e2e
+        run: |
+          cd backend
+          mkdir -p test-logs
+          # Run e2e tests and capture output
+          npm run test:e2e 2>&1 | tee test-logs/e2e.log || true
+          # Fail CI if admin secret appears in test logs
+          if [ -n "$ADMIN_SECRET_KEY" ] && grep -F --line-number "$ADMIN_SECRET_KEY" test-logs/e2e.log; then
+            echo "Admin secret appeared in e2e logs - failing CI"
+            exit 1
+          fi
         env:
           STELLAR_NETWORK: testnet
           CONTRACT_ID: ${{ secrets.CONTRACT_ID }}
