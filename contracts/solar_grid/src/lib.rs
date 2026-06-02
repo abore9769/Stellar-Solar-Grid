@@ -239,7 +239,6 @@ impl SolarGridContract {
             (EVT_NS, symbol_short!("mtr_reg"), meter_id),
             owner,
         );
-        env.events().publish(("meter", "registered"), (meter_id.clone(), owner.clone()));
         Ok(())
     }
 
@@ -382,9 +381,6 @@ impl SolarGridContract {
             (payer, token_address, amount, plan),
         );
         // meter_activated — payment always activates the meter
-        // payment_received
-        env.events().publish(("meter", "payment"), (meter_id.clone(), amount, plan));
-        // meter_activated
         env.events().publish(
             (EVT_NS, symbol_short!("mtr_actv"), meter_id),
             (),
@@ -453,7 +449,10 @@ impl SolarGridContract {
             return Err(ContractError::InsufficientBalance);
         }
         token_client.transfer(&env.current_contract_address(), &admin, &amount);
-        env.events().publish(("admin", "withdraw"), (admin.clone(), amount));
+        env.events().publish(
+            (EVT_NS, symbol_short!("adm_wdrl"), admin.clone()),
+            (admin.clone(), amount),
+        );
         Ok(())
     }
 
@@ -510,8 +509,6 @@ impl SolarGridContract {
             (EVT_NS, symbol_short!("usg_upd"), meter_id.clone()),
             (units, cost),
         );
-        // usage_updated
-        env.events().publish(("meter", "usage"), (meter_id.clone(), units, cost));
         // meter_deactivated — only when balance drained to zero
         if deactivated {
             env.events().publish(
@@ -536,8 +533,6 @@ impl SolarGridContract {
     }
 
     /// Get meter details.
-    pub fn get_meter(env: Env, meter_id: Symbol) -> Option<Meter> {
-        env.storage().persistent().get(&DataKey::Meter(meter_id))
     pub fn get_meter(env: Env, meter_id: String) -> Result<Meter, ContractError> {
         let key = DataKey::Meter(meter_id);
         Self::get_meter_or_error(&env, &key)
@@ -572,19 +567,11 @@ impl SolarGridContract {
                 (symbol_short!("access"), meter_id.clone()),
                 true,
             );
-            env.events().publish(
-                (symbol_short!("mtr_actv"), EVT_NS, meter_id),
-                (),
-            );
         } else {
             env.events().publish(
                 (EVT_NS, symbol_short!("mtr_deact"), meter_id),
                 (symbol_short!("access"), meter_id.clone()),
                 false,
-            );
-            env.events().publish(
-                (symbol_short!("mtr_deact"), EVT_NS, meter_id),
-                (),
             );
         }
         Ok(())
@@ -604,11 +591,11 @@ impl SolarGridContract {
         env.storage().persistent().set(&key, &meter);
 
         env.events().publish(
-            (symbol_short!("access"), meter_id.clone()),
+            (EVT_NS, symbol_short!("access"), meter_id.clone()),
             false,
         );
         env.events().publish(
-            (symbol_short!("mtr_deact"), EVT_NS, meter_id),
+            (EVT_NS, symbol_short!("mtr_deact"), meter_id),
             (),
         );
         Ok(())
@@ -767,7 +754,7 @@ impl SolarGridContract {
             let key = DataKey::Meter(meter_id.clone());
             if !env.storage().persistent().has(&key) {
                 env.events().publish(
-                    (symbol_short!("btch_skip"), EVT_NS, meter_id.clone()),
+                    (EVT_NS, symbol_short!("btch_skip"), meter_id.clone()),
                     (),
                 );
                 continue;
@@ -778,19 +765,19 @@ impl SolarGridContract {
                 Ok(deactivated) => {
                     env.storage().persistent().set(&key, &meter);
                     env.events().publish(
-                        (symbol_short!("usg_upd"), EVT_NS, meter_id.clone()),
+                        (EVT_NS, symbol_short!("usg_upd"), meter_id.clone()),
                         (*units, *cost),
                     );
                     if deactivated {
                         env.events().publish(
-                            (symbol_short!("mtr_deact"), EVT_NS, meter_id.clone()),
+                            (EVT_NS, symbol_short!("mtr_deact"), meter_id.clone()),
                             (),
                         );
                     }
                 }
                 Err(_) => {
                     env.events().publish(
-                        (symbol_short!("btch_skip"), EVT_NS, meter_id.clone()),
+                        (EVT_NS, symbol_short!("btch_skip"), meter_id.clone()),
                         (),
                     );
                 }
@@ -1327,11 +1314,10 @@ mod tests {
 
         let events = env.events().all();
         let found = events.iter().any(|(_, topics, _)| {
-            topics.len() >= 2
+            topics.len() >= 3
                 && topics.get(0) == Some(EVT_NS.into())
                 && topics.get(1) == Some(symbol_short!("mtr_reg").into())
-                && topics.get(0).map(|v| sym_eq(&env, &v, Symbol::new(&env, "meter"))).unwrap_or(false)
-                && topics.get(1).map(|v| sym_eq(&env, &v, Symbol::new(&env, "registered"))).unwrap_or(false)
+                && topics.get(2) == Some(meter_id.clone().into())
         });
         assert!(found, "meter registered event not emitted");
     }
@@ -1349,17 +1335,16 @@ mod tests {
 
         let events = env.events().all();
         let has_pmt = events.iter().any(|(_, topics, _)| {
-            topics.get(0) == Some(EVT_NS.into())
+            topics.len() >= 3
+                && topics.get(0) == Some(EVT_NS.into())
                 && topics.get(1) == Some(symbol_short!("payment").into())
+                && topics.get(2) == Some(meter_id.clone().into())
         });
         let has_actv = events.iter().any(|(_, topics, _)| {
-            topics.get(0) == Some(EVT_NS.into())
+            topics.len() >= 3
+                && topics.get(0) == Some(EVT_NS.into())
                 && topics.get(1) == Some(symbol_short!("mtr_actv").into())
-            topics.get(0).map(|v| sym_eq(&env, &v, Symbol::new(&env, "meter"))).unwrap_or(false)
-                && topics.get(1).map(|v| sym_eq(&env, &v, Symbol::new(&env, "payment"))).unwrap_or(false)
-        });
-        let has_actv = events.iter().any(|(_, topics, _)| {
-            topics.get(0).map(|v| sym_eq(&env, &v, symbol_short!("mtr_actv"))).unwrap_or(false)
+                && topics.get(2) == Some(meter_id.clone().into())
         });
         assert!(has_pmt, "payment event not emitted");
         assert!(has_actv, "mtr_actv event not emitted");
@@ -1381,17 +1366,16 @@ mod tests {
 
         let events = env.events().all();
         let has_usg = events.iter().any(|(_, topics, _)| {
-            topics.get(0) == Some(EVT_NS.into())
+            topics.len() >= 3
+                && topics.get(0) == Some(EVT_NS.into())
                 && topics.get(1) == Some(symbol_short!("usg_upd").into())
+                && topics.get(2) == Some(meter_id.clone().into())
         });
         let has_deact = events.iter().any(|(_, topics, _)| {
-            topics.get(0) == Some(EVT_NS.into())
+            topics.len() >= 3
+                && topics.get(0) == Some(EVT_NS.into())
                 && topics.get(1) == Some(symbol_short!("mtr_deact").into())
-            topics.get(0).map(|v| sym_eq(&env, &v, Symbol::new(&env, "meter"))).unwrap_or(false)
-                && topics.get(1).map(|v| sym_eq(&env, &v, Symbol::new(&env, "usage"))).unwrap_or(false)
-        });
-        let has_deact = events.iter().any(|(_, topics, _)| {
-            topics.get(0).map(|v| sym_eq(&env, &v, symbol_short!("mtr_deact"))).unwrap_or(false)
+                && topics.get(2) == Some(meter_id.clone().into())
         });
         assert!(has_usg, "usage event not emitted");
         assert!(has_deact, "mtr_deact event not emitted on balance drain");
@@ -1412,9 +1396,10 @@ mod tests {
 
         let events = env.events().all();
         let has_deact = events.iter().any(|(_, topics, _)| {
-            topics.get(0) == Some(EVT_NS.into())
+            topics.len() >= 3
+                && topics.get(0) == Some(EVT_NS.into())
                 && topics.get(1) == Some(symbol_short!("mtr_deact").into())
-            topics.get(0).map(|v| sym_eq(&env, &v, symbol_short!("mtr_deact"))).unwrap_or(false)
+                && topics.get(2) == Some(meter_id.clone().into())
         });
         assert!(has_deact, "mtr_deact event not emitted by set_active(false)");
     }
@@ -1482,8 +1467,10 @@ mod tests {
 
         let events = env.events().all();
         let has_actv = events.iter().any(|(_, topics, _)| {
-            topics.get(0).map(|v| sym_eq(&env, &v, symbol_short!("mtr_actv"))).unwrap_or(false)
-                && topics.get(1).map(|v| sym_eq(&env, &v, EVT_NS)).unwrap_or(false)
+            topics.len() >= 3
+                && topics.get(0) == Some(EVT_NS.into())
+                && topics.get(1) == Some(symbol_short!("mtr_actv").into())
+                && topics.get(2) == Some(meter_id.clone().into())
         });
         assert!(has_actv, "mtr_actv event not emitted by set_active(true)");
     }

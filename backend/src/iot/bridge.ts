@@ -332,14 +332,15 @@ async function handleContractEvent(
   try {
     const topics = event.topic;
 
-    if (topics.length < 2) return;
+    if (topics.length < 3) return;
 
-    const ns = topics[0].sym()?.toString(); // e.g. "payment" or "meter"
-    const name = topics[1].sym()?.toString(); // e.g. "received", "activated", "deactivated"
+    const ns = topics[0].sym()?.toString(); // namespace, e.g. "solargrid"
+    const action = topics[1].sym()?.toString(); // action, e.g. "payment", "mtr_actv"
+    const subject = topics[2].sym()?.toString() ?? topics[2].str()?.toString();
 
-    if (!ns || !name) return;
+    if (!ns || !action) return;
 
-    const eventKey = `${ns}:${name}`;
+    const eventKey = `${ns}:${action}`;
 
     switch (eventKey) {
       case "payment:received": {

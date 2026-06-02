@@ -1,10 +1,8 @@
 import "dotenv/config";
 import express from "express";
 import cors from "cors";
-import { meterRouter } from "./routes/meters.js";
 import timeout from "connect-timeout";
 import { NextFunction, Request, Response } from "express";
-import cors from "cors";
 import mqtt from "mqtt";
 import { stellarService, server } from "./lib/stellar.js";
 import { createMeterRouter } from "./routes/meters.js";
@@ -20,23 +18,17 @@ import {
   startUsageEventRetryWorker,
 } from "./lib/usageEvents.js";
 
-// Environment variable validation
-const REQUIRED_ENV = [
-  'ADMIN_SECRET_KEY',
-  'CONTRACT_ID',
-  'STELLAR_RPC_URL',
-  'MQTT_BROKER',
-];
+const REQUIRED_ENV = ["CONTRACT_ID", "ADMIN_SECRET_KEY", "STELLAR_RPC_URL", "MQTT_BROKER"];
+const PORT = process.env.PORT ?? 3001;
 
-const missing = REQUIRED_ENV.filter(k => !process.env[k]);
+const missing = REQUIRED_ENV.filter((k) => !process.env[k]);
 if (missing.length > 0) {
-  logger.error('Missing required environment variables: ' + missing.join(', '));
-  logger.error('Copy backend/.env.example to backend/.env and fill in the values.');
+  logger.fatal(
+    { missing },
+    "Missing required environment variables. Copy backend/.env.example to backend/.env."
+  );
   process.exit(1);
 }
-
-const REQUIRED_ENV = ["CONTRACT_ID", "ADMIN_SECRET_KEY"];
-const PORT = process.env.PORT ?? 3001;
 
 const missing = REQUIRED_ENV.filter((k) => !process.env[k]);
 if (missing.length > 0) {
