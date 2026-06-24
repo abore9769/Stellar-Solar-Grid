@@ -316,9 +316,15 @@ impl SolarGridContract {
     }
 
     /// Register the IoT oracle address. Only admin may call this.
+    /// Emits `ora_set` event with (old_oracle, new_oracle) for audit trail.
     pub fn set_oracle(env: Env, oracle: Address) -> Result<(), ContractError> {
         Self::require_admin(&env)?;
+        let old_oracle: Option<Address> = env.storage().instance().get(&ORACLE);
         env.storage().instance().set(&ORACLE, &oracle);
+        env.events().publish(
+            (EVT_NS, symbol_short!("ora_set")),
+            (old_oracle, oracle),
+        );
         Ok(())
     }
 
@@ -326,6 +332,15 @@ impl SolarGridContract {
     pub fn get_oracle(env: Env) -> Result<Option<Address>, ContractError> {
         Self::require_initialized(&env)?;
         Ok(env.storage().instance().get(&ORACLE))
+    }
+
+    /// Explicitly clear the oracle address. Only admin may call this.
+    /// Emits `ora_clr` event.
+    pub fn remove_oracle(env: Env) -> Result<(), ContractError> {
+        Self::require_admin(&env)?;
+        env.storage().instance().remove(&ORACLE);
+        env.events().publish((EVT_NS, symbol_short!("ora_clr")), ());
+        Ok(())
     }
 
     /// Make a payment to top up a meter's balance and activate it.
@@ -461,6 +476,22 @@ impl SolarGridContract {
         Self::require_initialized(&env)?;
         let provider_key = DataKey::ProviderRevenue(provider);
         Ok(env.storage().persistent().get(&provider_key).unwrap_or(0))
+    }
+
+    /// Return revenue balances for the admin and all collaborators. Admin-only.
+    pub fn get_revenue_summary(env: Env) -> Result<Map<Address, i128>, ContractError> {
+        Self::require_admin(&env)?;
+        let collabs: Vec<Address> = env.storage().instance().get(&COLLABS).unwrap_or(Vec::new(&env));
+        let admin = Self::get_admin(&env)?;
+
+        let mut result: Map<Address, i128> = Map::new(&env);
+        let admin_key = DataKey::ProviderRevenue(admin.clone());
+        result.set(admin.clone(), env.storage().persistent().get(&admin_key).unwrap_or(0));
+        for c in collabs.iter() {
+            let key = DataKey::ProviderRevenue(c.clone());
+            result.set(c, env.storage().persistent().get(&key).unwrap_or(0));
+        }
+        Ok(result)
     }
 
     /// Check whether a meter currently has active energy access.
@@ -683,6 +714,28 @@ impl SolarGridContract {
             result.set(collaborator, payout);
         }
         Ok(result)
+    }
+
+    /// Distribute `amount` stroops and perform the actual token transfers atomically.
+    /// Uses `distribute` internally to compute shares, then transfers to each collaborator.
+    /// Emits `distrib` event after all transfers succeed.
+    pub fn distribute_and_transfer(env: Env, amount: i128) -> Result<Map<Address, i128>, ContractError> {
+        Self::require_admin(&env)?;
+        if amount <= 0 {
+            return Err(ContractError::InvalidAmount);
+        }
+
+        let token_address = Self::get_token_address(&env)?;
+        let token = token::Client::new(&env, &token_address);
+
+        let payouts = Self::distribute(env.clone(), amount)?;
+        for (collaborator, payout) in payouts.iter() {
+            if payout > 0 {
+                token.transfer(&env.current_contract_address(), &collaborator, &payout);
+            }
+        }
+        env.events().publish((EVT_NS, symbol_short!("distrib")), (amount,));
+        Ok(payouts)
     }
 
     // ── Internal helpers ──────────────────────────────────────────────────────
