@@ -1,5 +1,7 @@
 import "dotenv/config";
 import express from "express";
+import { randomUUID } from "crypto";
+import { requestContext } from "./lib/requestContext.js";
 import { meterRouter } from "./routes/meters.js";
 import { paymentsRouter } from "./routes/payments.js";
 import { webhookRouter } from "./routes/webhooks.js";
@@ -16,6 +18,11 @@ app.use(
     },
   })
 );
+app.use((req, res, next) => {
+  const reqId = (req.headers["x-request-id"] as string) ?? randomUUID();
+  res.setHeader("x-request-id", reqId);
+  requestContext.run({ reqId }, next);
+});
 app.use((_, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
