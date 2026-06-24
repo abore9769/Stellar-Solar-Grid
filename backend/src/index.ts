@@ -9,6 +9,8 @@ import { createMeterRouter } from "./routes/meters.js";
 import { paymentsRouter } from "./routes/payments.js";
 import { webhookRouter } from "./routes/webhooks.js";
 import { allowlistRouter } from "./routes/allowlist.js";
+import { collaboratorRouter } from "./routes/collaborators.js";
+import { statsRouter } from "./routes/stats.js";
 import { startIoTBridge } from "./iot/bridge.js";
 import { logger } from "./lib/logger.js";
 import requestLogger from "./middleware/requestLogger.js";
@@ -20,15 +22,6 @@ import {
 
 const REQUIRED_ENV = ["CONTRACT_ID", "ADMIN_SECRET_KEY", "STELLAR_RPC_URL", "MQTT_BROKER"];
 const PORT = process.env.PORT ?? 3001;
-
-const missing = REQUIRED_ENV.filter((k) => !process.env[k]);
-if (missing.length > 0) {
-  logger.fatal(
-    { missing },
-    "Missing required environment variables. Copy backend/.env.example to backend/.env."
-  );
-  process.exit(1);
-}
 
 const missing = REQUIRED_ENV.filter((k) => !process.env[k]);
 if (missing.length > 0) {
@@ -79,6 +72,8 @@ app.use("/api/meters", createMeterRouter(stellarService));
 app.use("/api/payments", paymentsRouter);
 app.use("/api/webhooks", webhookRouter);
 app.use("/api/allowlist", allowlistRouter);
+app.use("/api/collaborators", collaboratorRouter);
+app.use("/api/stats", statsRouter);
 
 app.get('/health', async (_req, res) => {
   const checks: Record<string, string> = {};

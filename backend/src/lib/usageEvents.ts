@@ -120,34 +120,31 @@ export function getUsageHistory(
   page: number,
   pageSize: number
 ): {
-  data: UsageEventRecord[];
-  pagination: { page: number; pageSize: number; total: number; totalPages: number };
+  events: UsageEventRecord[];
+  page: number;
+  pageSize: number;
+  total: number;
+  hasMore: boolean;
 } {
-  const totalRow = db
-    .prepare("SELECT COUNT(*) as total FROM usage_events WHERE meter_id = ?")
-    .get(meterId) as { total: number };
-  const total = totalRow.total;
   const offset = (page - 1) * pageSize;
-  const data = db
+
+  const events = db
     .prepare(
-      `
-        SELECT *
-        FROM usage_events
-        WHERE meter_id = ?
-        ORDER BY received_at DESC, id DESC
-        LIMIT ? OFFSET ?
-      `
+      "SELECT id, meter_id, units, cost, on_chain_tx_hash, received_at " +
+      "FROM usage_events WHERE meter_id = ? ORDER BY received_at DESC, id DESC LIMIT ? OFFSET ?"
     )
     .all(meterId, pageSize, offset) as UsageEventRecord[];
 
+  const { count } = db
+    .prepare("SELECT COUNT(*) as count FROM usage_events WHERE meter_id = ?")
+    .get(meterId) as { count: number };
+
   return {
-    data,
-    pagination: {
-      page,
-      pageSize,
-      total,
-      totalPages: Math.max(1, Math.ceil(total / pageSize)),
-    },
+    events,
+    page,
+    pageSize,
+    total: count,
+    hasMore: offset + pageSize < count,
   };
 }
 
