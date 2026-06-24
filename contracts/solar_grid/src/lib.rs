@@ -251,6 +251,60 @@ impl SolarGridContract {
             .unwrap_or_else(|| vec![&env]))
     }
 
+    /// Transfer meter ownership from the current owner to a new owner.
+    /// Both the current owner and the new owner must authorize this call.
+    /// The new owner must already be on the allowlist.
+    pub fn transfer_meter_ownership(
+        env: Env,
+        meter_id: String,
+        new_owner: Address,
+    ) -> Result<(), ContractError> {
+        let key = DataKey::Meter(meter_id.clone());
+        let mut meter = Self::get_meter_or_error(&env, &key)?;
+
+        meter.owner.require_auth();
+        new_owner.require_auth();
+
+        let allowlist = Self::get_allowlist(env.clone())?;
+        if !allowlist.contains(&new_owner) {
+            return Err(ContractError::OwnerNotAllowlisted);
+        }
+
+        // Remove meter_id from old owner's index
+        let old_key = DataKey::OwnerMeters(meter.owner.clone());
+        let old_list: Vec<String> = env
+            .storage()
+            .persistent()
+            .get(&old_key)
+            .unwrap_or_else(|| vec![&env]);
+        let mut filtered: Vec<String> = vec![&env];
+        for id in old_list.iter() {
+            if id != meter_id {
+                filtered.push_back(id);
+            }
+        }
+        env.storage().persistent().set(&old_key, &filtered);
+
+        // Add meter_id to new owner's index
+        let new_key = DataKey::OwnerMeters(new_owner.clone());
+        let mut new_list: Vec<String> = env
+            .storage()
+            .persistent()
+            .get(&new_key)
+            .unwrap_or_else(|| vec![&env]);
+        new_list.push_back(meter_id.clone());
+        env.storage().persistent().set(&new_key, &new_list);
+
+        meter.owner = new_owner.clone();
+        env.storage().persistent().set(&key, &meter);
+
+        env.events().publish(
+            (EVT_NS, symbol_short!("mtr_xfer"), meter_id),
+            new_owner,
+        );
+        Ok(())
+    }
+
     /// Get all registered meters (admin only).
     /// Returns all Meter structs across the entire contract.
     /// Used by provider dashboard to display all active meters.
