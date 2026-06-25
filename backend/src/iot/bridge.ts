@@ -11,6 +11,7 @@
 import mqtt from "mqtt";
 import { logger } from "../lib/logger.js";
 import { persistAndSubmitUsageEvent, insertSubmittedUsageEvents, getKV, setKV } from "../lib/usageEvents.js";
+import { getWebhookUrls } from "../lib/webhookRegistry.js";
 import { UsageUpdateSchema } from "../lib/validation.js";
 import {
   adminInvoke,
@@ -31,8 +32,6 @@ const EVENT_POLL_INTERVAL_MS = Number(
   process.env.EVENT_POLL_INTERVAL_MS ?? 5_000,
 );
 
-// Low balance webhook configuration
-const WEBHOOK_URL = process.env.PROVIDER_WEBHOOK_URL;
 const LOW_BALANCE_THRESHOLD = parseInt(
   process.env.LOW_BALANCE_THRESHOLD ?? "1000000",
 ); // 0.1 XLM in stroops
@@ -45,7 +44,8 @@ interface Reading {
 
 /** Fire webhook notification when meter balance drops below threshold */
 async function checkAndNotifyLowBalance(meterId: string) {
-  if (!WEBHOOK_URL) return;
+  const urls = getWebhookUrls();
+  if (urls.size === 0) return;
 
   try {
     const result = await contractQuery("get_meter", [
@@ -58,22 +58,26 @@ async function checkAndNotifyLowBalance(meterId: string) {
     const balance = Number(meter.balance);
 
     if (balance <= LOW_BALANCE_THRESHOLD) {
-      await fetch(WEBHOOK_URL, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          event: "low_balance",
-          meter_id: meterId,
-          balance,
-          threshold: LOW_BALANCE_THRESHOLD,
-          timestamp: new Date().toISOString(),
-        }),
+      const body = JSON.stringify({
+        event: "low_balance",
+        meter_id: meterId,
+        balance,
+        threshold: LOW_BALANCE_THRESHOLD,
+        timestamp: new Date().toISOString(),
       });
+      await Promise.all(
+        [...urls].map((url) =>
+          fetch(url, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body,
+          }).catch((err) => logger.error("Low balance webhook failed", { url, meterId, err })),
+        ),
+      );
       logger.info("Low balance webhook fired", { meterId, balance });
     }
   } catch (err) {
     logger.error("Low balance webhook failed", { meterId, err });
-    // Log but do not crash the bridge
   }
 }
 
@@ -134,7 +138,7 @@ export async function processMqttMessage(topic: string, payload: Buffer) {
       txHash: event.on_chain_tx_hash,
     });
     // Check if balance is low after usage update
-    checkAndNotifyLowBalance(meterId);
+    void checkAndNotifyLowBalance(meterId);
   } else {
     logger.warn("Usage event queued for retry", {
       meterId,

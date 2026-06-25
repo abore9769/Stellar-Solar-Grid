@@ -191,9 +191,66 @@ export default function ProviderDashboardPage() {
               disabled={status === "loading" || addressInvalid}
               className="w-full rounded-lg bg-solar-yellow py-3.5 text-base font-semibold text-solar-dark hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition"
             >
-              {status === "loading" ? "Registering…" : "Register Meter"}
-            </button>
-          </form>
+              {/* Meter ID */}
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-1.5">
+                  Meter ID
+                </label>
+                <input
+                  type="text"
+                  value={meterId}
+                  onChange={(e) => { setMeterId(e.target.value); reset(); }}
+                  placeholder="e.g. METER5"
+                  required
+                  disabled={status === "loading"}
+                  className="w-full rounded-lg border border-white/10 bg-solar-dark px-4 py-2.5 text-sm text-white placeholder-gray-600 focus:border-solar-yellow focus:outline-none transition"
+                />
+              </div>
+
+              {/* Owner Address */}
+              <div>
+                <label className="block text-sm font-medium text-gray-300 mb-1.5">
+                  Owner Stellar Address
+                </label>
+                <input
+                  type="text"
+                  value={ownerAddress}
+                  onChange={(e) => { setOwnerAddress(e.target.value); reset(); }}
+                  placeholder="G…"
+                  required
+                  disabled={status === "loading"}
+                  aria-describedby={addressInvalid ? "address-hint" : undefined}
+                  className={`w-full rounded-lg border px-4 py-2.5 text-sm text-white placeholder-gray-600 bg-solar-dark focus:outline-none transition ${
+                    addressInvalid
+                      ? "border-red-500/60 focus:border-red-500"
+                      : "border-white/10 focus:border-solar-yellow"
+                  }`}
+                />
+                {addressInvalid && (
+                  <p id="address-hint" className="mt-1 text-xs text-red-400">
+                    Must be a valid Stellar address (G…, 56 characters)
+                  </p>
+                )}
+              </div>
+
+              <button
+                type="submit"
+                disabled={status === "loading" || addressInvalid}
+                className="w-full rounded-lg bg-solar-yellow py-3.5 text-base font-semibold text-solar-dark hover:opacity-90 disabled:opacity-50 disabled:cursor-not-allowed transition"
+              >
+                {status === "loading" ? "Registering…" : "Register Meter"}
+              </button>
+            </form>
+          </section>
+
+          <section>
+            <h2 className="text-lg font-semibold text-white mb-4">Revenue Collaborators</h2>
+            <CollaboratorTable
+              collaborators={collaborators}
+              onAdd={handleAddCollaborator}
+              onRemove={handleRemoveCollaborator}
+            />
+          </section>
         </div>
 
         {/* Stats row */}

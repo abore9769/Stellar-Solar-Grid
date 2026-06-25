@@ -49,19 +49,19 @@ paymentsRouter.get(
       return res.status(400).json({ error: "Invalid Stellar address" });
     }
 
-    const records = await fetchPaymentEvents(address, sort);
-    const total = records.length;
-    const start = (page - 1) * limit;
-    const paginated = records.slice(start, start + limit);
+    try {
+      const records = await fetchPaymentEvents(address, sort);
+      const total = records.length;
+      const start = (page - 1) * limit;
+      const paginated = records.slice(start, start + limit);
 
-    return res.json({
-      payments: paginated,
-      pagination: { page, limit, total, pages: Math.ceil(total / limit) },
-    });
-  } catch (err: any) {
-    return res.status(500).json({ error: err.message ?? "Failed to fetch payment history" });
-  }
-});
+      return res.json({
+        payments: paginated,
+        pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+      });
+    } catch (err: any) {
+      return res.status(500).json({ error: err.message ?? "Failed to fetch payment history" });
+    }
   }),
 );
 
@@ -72,7 +72,6 @@ async function fetchPaymentEvents(
   sort: "asc" | "desc",
 ): Promise<PaymentRecord[]> {
   // Query Soroban RPC for contract events
-  // Events follow (EVT_NS, action, subject) pattern; filter on namespace + action
   const EVT_NS = StellarSdk.xdr.ScVal.scvSymbol("solargrid").toXDR("base64");
   const ACTION = StellarSdk.xdr.ScVal.scvSymbol("payment").toXDR("base64");
 
@@ -83,7 +82,6 @@ async function fetchPaymentEvents(
         type: "contract",
         contractIds: [CONTRACT_ID],
         topics: [
-          // topics[0] = EVT_NS ("solargrid"), topics[1] = action ("payment")
           [EVT_NS, ACTION],
         ],
       },
@@ -103,7 +101,6 @@ async function fetchPaymentEvents(
     }
   }
 
-  // Sort by date
   events.sort((a, b) => {
     const diff = new Date(a.date).getTime() - new Date(b.date).getTime();
     return sort === "asc" ? diff : -diff;
@@ -129,19 +126,8 @@ function parsePaymentEvent(
 
   if (topics.length < 3) return null;
 
-  // topics[0] = namespace, topics[1] = action, topics[2] = meter_id (subject)
+  // topics[2] = meter_id (subject)
   const meterVal = topics[2];
-  const payerVal = topics[2];
-  const payer =
-    payerVal.switch().name === "scvAddress"
-      ? StellarSdk.StrKey.encodeEd25519PublicKey(
-          payerVal.address().accountId().ed25519(),
-        )
-      : null;
-
-  if (!payer || payer !== filterAddress) return null;
-
-  const meterVal = topics[1];
   const meterId =
     meterVal.switch().name === "scvSymbol"
       ? meterVal.sym().toString()
@@ -174,7 +160,6 @@ function parsePaymentEvent(
 
   if (!payer || payer !== filterAddress) return null;
 
-  // Ledger close time from event
   const date = event.ledgerClosedAt
     ? new Date(event.ledgerClosedAt).toISOString()
     : new Date().toISOString();
@@ -187,3 +172,6 @@ function parsePaymentEvent(
     plan,
   };
 }
+
+// suppress unused import warning — horizonServer reserved for fallback
+void horizonServer;
