@@ -74,7 +74,7 @@ export default function PayPage() {
 
   async function handlePay(e: React.FormEvent) {
     e.preventDefault();
-    if (!address) return;
+    if (isOffline || !address) return;
 
     const amountNum = parseFloat(amount);
     if (!meterId.trim() || isNaN(amountNum) || amountNum <= 0) return;
@@ -84,6 +84,15 @@ export default function PayPage() {
   }
 
   async function confirmPayment() {
+    if (isOffline) {
+      showToast({
+        variant: "error",
+        title: "Offline",
+        description: "Blockchain payments unavailable offline.",
+      });
+      setShowSmsModal(true);
+      return;
+    }
     if (!address) return;
     setShowConfirm(false);
     setStatus("loading");
