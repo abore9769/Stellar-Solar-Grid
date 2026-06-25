@@ -102,8 +102,6 @@ export function createMeterRouter(stellar: StellarService) {
     requireAdminKey,
     asyncHandler(async (req, res) => {
       const meterId = req.params.id;
-
-      // Verify meter exists first
       try {
         await stellar.query("get_meter", [
           StellarSdk.nativeToScVal(meterId, { type: "symbol" }),
@@ -111,15 +109,32 @@ export function createMeterRouter(stellar: StellarService) {
       } catch {
         return res.status(404).json({ error: "Meter not found" });
       }
+      const hash = await stellar.invoke("set_active", [
+        StellarSdk.nativeToScVal(meterId, { type: "symbol" }),
+        StellarSdk.nativeToScVal(false, { type: "bool" }),
+      ]);
+      res.json({ hash, meter_id: meterId, active: false });
+    }),
+  );
 
+  /** POST /api/meters/:id/activate — admin manually activates a meter */
+  meterRouter.post(
+    "/:id/activate",
+    requireAdminKey,
+    asyncHandler(async (req, res) => {
+      const meterId = req.params.id;
       try {
-        const txHash = await stellar.invoke("deactivate_meter", [
+        await stellar.query("get_meter", [
           StellarSdk.nativeToScVal(meterId, { type: "symbol" }),
         ]);
-        res.json({ success: true, tx_hash: txHash, meter_id: meterId });
-      } catch (err: any) {
-        res.status(500).json({ error: err.message });
+      } catch {
+        return res.status(404).json({ error: "Meter not found" });
       }
+      const hash = await stellar.invoke("set_active", [
+        StellarSdk.nativeToScVal(meterId, { type: "symbol" }),
+        StellarSdk.nativeToScVal(true, { type: "bool" }),
+      ]);
+      res.json({ hash, meter_id: meterId, active: true });
     }),
   );
 

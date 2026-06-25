@@ -260,6 +260,60 @@ impl SolarGridContract {
             .unwrap_or_else(|| vec![&env]))
     }
 
+    /// Transfer meter ownership from the current owner to a new owner.
+    /// Both the current owner and the new owner must authorize this call.
+    /// The new owner must already be on the allowlist.
+    pub fn transfer_meter_ownership(
+        env: Env,
+        meter_id: String,
+        new_owner: Address,
+    ) -> Result<(), ContractError> {
+        let key = DataKey::Meter(meter_id.clone());
+        let mut meter = Self::get_meter_or_error(&env, &key)?;
+
+        meter.owner.require_auth();
+        new_owner.require_auth();
+
+        let allowlist = Self::get_allowlist(env.clone())?;
+        if !allowlist.contains(&new_owner) {
+            return Err(ContractError::OwnerNotAllowlisted);
+        }
+
+        // Remove meter_id from old owner's index
+        let old_key = DataKey::OwnerMeters(meter.owner.clone());
+        let old_list: Vec<String> = env
+            .storage()
+            .persistent()
+            .get(&old_key)
+            .unwrap_or_else(|| vec![&env]);
+        let mut filtered: Vec<String> = vec![&env];
+        for id in old_list.iter() {
+            if id != meter_id {
+                filtered.push_back(id);
+            }
+        }
+        env.storage().persistent().set(&old_key, &filtered);
+
+        // Add meter_id to new owner's index
+        let new_key = DataKey::OwnerMeters(new_owner.clone());
+        let mut new_list: Vec<String> = env
+            .storage()
+            .persistent()
+            .get(&new_key)
+            .unwrap_or_else(|| vec![&env]);
+        new_list.push_back(meter_id.clone());
+        env.storage().persistent().set(&new_key, &new_list);
+
+        meter.owner = new_owner.clone();
+        env.storage().persistent().set(&key, &meter);
+
+        env.events().publish(
+            (EVT_NS, symbol_short!("mtr_xfer"), meter_id),
+            new_owner,
+        );
+        Ok(())
+    }
+
     /// Get all registered meters (admin only).
     /// Returns all Meter structs across the entire contract.
     /// Used by provider dashboard to display all active meters.
@@ -325,9 +379,15 @@ impl SolarGridContract {
     }
 
     /// Register the IoT oracle address. Only admin may call this.
+    /// Emits `ora_set` event with (old_oracle, new_oracle) for audit trail.
     pub fn set_oracle(env: Env, oracle: Address) -> Result<(), ContractError> {
         Self::require_admin(&env)?;
+        let old_oracle: Option<Address> = env.storage().instance().get(&ORACLE);
         env.storage().instance().set(&ORACLE, &oracle);
+        env.events().publish(
+            (EVT_NS, symbol_short!("ora_set")),
+            (old_oracle, oracle),
+        );
         Ok(())
     }
 
@@ -335,6 +395,15 @@ impl SolarGridContract {
     pub fn get_oracle(env: Env) -> Result<Option<Address>, ContractError> {
         Self::require_initialized(&env)?;
         Ok(env.storage().instance().get(&ORACLE))
+    }
+
+    /// Explicitly clear the oracle address. Only admin may call this.
+    /// Emits `ora_clr` event.
+    pub fn remove_oracle(env: Env) -> Result<(), ContractError> {
+        Self::require_admin(&env)?;
+        env.storage().instance().remove(&ORACLE);
+        env.events().publish((EVT_NS, symbol_short!("ora_clr")), ());
+        Ok(())
     }
 
     /// Make a payment to top up a meter's balance and activate it.
@@ -470,6 +539,22 @@ impl SolarGridContract {
         Self::require_initialized(&env)?;
         let provider_key = DataKey::ProviderRevenue(provider);
         Ok(env.storage().persistent().get(&provider_key).unwrap_or(0))
+    }
+
+    /// Return revenue balances for the admin and all collaborators. Admin-only.
+    pub fn get_revenue_summary(env: Env) -> Result<Map<Address, i128>, ContractError> {
+        Self::require_admin(&env)?;
+        let collabs: Vec<Address> = env.storage().instance().get(&COLLABS).unwrap_or(Vec::new(&env));
+        let admin = Self::get_admin(&env)?;
+
+        let mut result: Map<Address, i128> = Map::new(&env);
+        let admin_key = DataKey::ProviderRevenue(admin.clone());
+        result.set(admin.clone(), env.storage().persistent().get(&admin_key).unwrap_or(0));
+        for c in collabs.iter() {
+            let key = DataKey::ProviderRevenue(c.clone());
+            result.set(c, env.storage().persistent().get(&key).unwrap_or(0));
+        }
+        Ok(result)
     }
 
     /// Check whether a meter currently has active energy access.
@@ -703,95 +788,26 @@ impl SolarGridContract {
         Ok(result)
     }
 
-    /// Register up to 50 meters in a single transaction.
-    /// Skips meters whose owner is not allowlisted or that already exist,
-    /// emitting a reg_skip event for each. Updates OwnerMeters and METER_LIST indexes.
-    pub fn batch_register_meters(
-        env: Env,
-        meters: Vec<(String, Address)>,
-    ) -> Result<(), ContractError> {
+    /// Distribute `amount` stroops and perform the actual token transfers atomically.
+    /// Uses `distribute` internally to compute shares, then transfers to each collaborator.
+    /// Emits `distrib` event after all transfers succeed.
+    pub fn distribute_and_transfer(env: Env, amount: i128) -> Result<Map<Address, i128>, ContractError> {
         Self::require_admin(&env)?;
-        if meters.len() > 50 {
-            return Err(ContractError::BatchTooLarge);
+        if amount <= 0 {
+            return Err(ContractError::InvalidAmount);
         }
-        let allowlist = Self::get_allowlist(env.clone())?;
-        for (meter_id, owner) in meters.iter() {
-            if !allowlist.contains(&owner) {
-                env.events().publish(
-                    (EVT_NS, symbol_short!("reg_skip"), meter_id.clone()),
-                    owner.clone(),
-                );
-                continue;
+
+        let token_address = Self::get_token_address(&env)?;
+        let token = token::Client::new(&env, &token_address);
+
+        let payouts = Self::distribute(env.clone(), amount)?;
+        for (collaborator, payout) in payouts.iter() {
+            if payout > 0 {
+                token.transfer(&env.current_contract_address(), &collaborator, &payout);
             }
-            let key = DataKey::Meter(meter_id.clone());
-            if env.storage().persistent().has(&key) {
-                env.events().publish(
-                    (EVT_NS, symbol_short!("reg_skip"), meter_id.clone()),
-                    owner.clone(),
-                );
-                continue;
-            }
-            let now = env.ledger().timestamp();
-            let meter = Meter {
-                version: 2,
-                owner: owner.clone(),
-                active: false,
-                units_used: 0,
-                plan: PaymentPlan::Daily,
-                last_payment: now,
-                expires_at: now,
-                daily_limit: 0,
-                day_spent: 0,
-                day_start: now,
-            };
-            env.storage().persistent().set(&key, &meter);
-
-            let owner_key = DataKey::OwnerMeters(owner.clone());
-            let mut list: Vec<String> = env
-                .storage()
-                .persistent()
-                .get(&owner_key)
-                .unwrap_or_else(|| vec![&env]);
-            list.push_back(meter_id.clone());
-            env.storage().persistent().set(&owner_key, &list);
-
-            let mut global_list: Vec<String> = env
-                .storage()
-                .instance()
-                .get(&METER_LIST)
-                .unwrap_or_else(|| vec![&env]);
-            global_list.push_back(meter_id.clone());
-            env.storage().instance().set(&METER_LIST, &global_list);
-
-            env.events().publish(
-                (EVT_NS, symbol_short!("mtr_reg"), meter_id.clone()),
-                owner.clone(),
-            );
         }
-        Ok(())
-    }
-
-    /// Propose a new admin address. Current admin only.
-    /// The transfer is completed only when the new address calls accept_admin.
-    pub fn propose_admin(env: Env, new_admin: Address) -> Result<(), ContractError> {
-        Self::require_admin(&env)?;
-        env.storage().instance().set(&PENDING_ADMIN, &new_admin);
-        env.events().publish((EVT_NS, symbol_short!("adm_prop")), new_admin);
-        Ok(())
-    }
-
-    /// Accept an in-flight admin transfer. Must be called by the pending admin.
-    pub fn accept_admin(env: Env) -> Result<(), ContractError> {
-        let pending: Address = env
-            .storage()
-            .instance()
-            .get(&PENDING_ADMIN)
-            .ok_or(ContractError::Unauthorized)?;
-        pending.require_auth();
-        env.storage().instance().set(&ADMIN, &pending);
-        env.storage().instance().remove(&PENDING_ADMIN);
-        env.events().publish((EVT_NS, symbol_short!("adm_set")), pending);
-        Ok(())
+        env.events().publish((EVT_NS, symbol_short!("distrib")), (amount,));
+        Ok(payouts)
     }
 
     // ── Internal helpers ──────────────────────────────────────────────────────
