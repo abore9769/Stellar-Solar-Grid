@@ -196,6 +196,35 @@ export default function ProviderDashboardPage() {
           </form>
         </div>
 
+        {/* Stats row */}
+        <div className="w-full max-w-5xl">
+          {(() => {
+            const now = Date.now() / 1000;
+            const activeCount = meters.filter((m) => {
+              const exp = Number(m.expires_at);
+              return m.active && !(exp !== Number.MAX_SAFE_INTEGER && exp > 0 && now >= exp);
+            }).length;
+            const inactiveCount = meters.length - activeCount;
+            return (
+              <div className="grid grid-cols-3 gap-4 mb-8">
+                {[
+                  { label: "Total Meters", value: meters.length },
+                  { label: "Active", value: activeCount, color: "text-green-400" },
+                  { label: "Inactive", value: inactiveCount, color: "text-red-400" },
+                ].map(({ label, value, color }) => (
+                  <div
+                    key={label}
+                    className="rounded-xl border border-white/10 bg-solar-accent px-5 py-4 text-center"
+                  >
+                    <p className="text-xs uppercase tracking-wider text-gray-500 mb-1">{label}</p>
+                    <p className={`text-2xl font-bold ${color ?? "text-white"}`}>{fetching ? "—" : value}</p>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
+        </div>
+
         {/* Meters Table */}
         <div className="w-full max-w-5xl">
           <div className="flex items-center justify-between mb-6">

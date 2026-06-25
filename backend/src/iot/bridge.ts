@@ -379,6 +379,16 @@ async function handleContractEvent(
         break;
       }
 
+      case "solargrid:lmt_set": {
+        const [oldLimit, newLimit] = StellarSdk.scValToNative(event.value) as [bigint, bigint];
+        logger.info("lmt_set contract event", {
+          meterId: subject,
+          oldLimit: Number(oldLimit),
+          newLimit: Number(newLimit),
+        });
+        break;
+      }
+
       default:
         break;
     }

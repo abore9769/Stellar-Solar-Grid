@@ -1,11 +1,11 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo, useRef } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
 import Navbar from "@/components/Navbar";
 import { SkeletonCard } from "@/components/SkeletonCard";
 import { Skeleton } from "@/components/Skeleton";
-import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer } from "recharts";
+import UsageChart, { type UsageDataPoint } from "@/components/UsageChart";
 import { useWalletStore } from "@/store/walletStore";
 import { getMeter, getMetersByOwner, type MeterData } from "@/services/meterService";
 import { parseWalletError } from "@/lib/errors";
@@ -88,7 +88,7 @@ function MeterCard({ meterId, meter }: { meterId: string; meter: MeterData }) {
   const isExpired = expiresAt !== Number.MAX_SAFE_INTEGER && expiresAt > 0 && now >= expiresAt;
   const hasAccess = meter.active && meter.balance > 0n && !isExpired;
 
-  const [history, setHistory] = useState<any[]>([]);
+  const [history, setHistory] = useState<UsageDataPoint[]>([]);
   const [loadingHistory, setLoadingHistory] = useState(true);
 
   useEffect(() => {
@@ -96,7 +96,12 @@ function MeterCard({ meterId, meter }: { meterId: string; meter: MeterData }) {
     fetch('/api/meters/' + meterId + '/history?limit=7')
       .then(r => r.json())
       .then(d => {
-        setHistory(d.events || []);
+        const events: UsageDataPoint[] = (d.events || []).map((e: { recorded_at: string; units: number; cost?: number }) => ({
+          date: new Date(e.recorded_at).toLocaleDateString(),
+          units: e.units,
+          cost: e.cost,
+        }));
+        setHistory(events);
         setLoadingHistory(false);
       })
       .catch(() => {
@@ -158,32 +163,7 @@ function MeterCard({ meterId, meter }: { meterId: string; meter: MeterData }) {
 
       {/* Usage History Chart */}
       <div className="pt-4 border-t border-white/10">
-        <h3 className="text-sm font-semibold text-gray-300 mb-4">Last 7 Days Usage</h3>
-        {loadingHistory ? (
-          <Skeleton height={200} />
-        ) : history.length === 0 ? (
-          <div className="h-[200px] flex items-center justify-center text-gray-500 text-sm border border-white/5 rounded-lg bg-black/20">
-            No history available
-          </div>
-        ) : (
-          <ResponsiveContainer width="100%" height={200}>
-            <LineChart data={history}>
-              <XAxis 
-                dataKey="recorded_at" 
-                tickFormatter={d => new Date(d).toLocaleDateString()} 
-                stroke="#9ca3af"
-                fontSize={12}
-              />
-              <YAxis stroke="#9ca3af" fontSize={12} />
-              <Tooltip 
-                contentStyle={{ backgroundColor: '#1c2b3a', border: 'none', borderRadius: '8px' }}
-                itemStyle={{ color: '#00d4ff' }}
-                labelStyle={{ color: '#9ca3af' }}
-              />
-              <Line type="monotone" dataKey="units" stroke="#00d4ff" strokeWidth={2} dot={false} />
-            </LineChart>
-          </ResponsiveContainer>
-        )}
+        <UsageChart data={history} loading={loadingHistory} meterId={meterId} />
       </div>
 
       {/* Actions */}

@@ -36,6 +36,7 @@ const ORACLE: Symbol = symbol_short!("ORACLE");
 const METER_LIST: Symbol = symbol_short!("MLIST");
 const COLLABS: Symbol = symbol_short!("COLLABS");
 const SHARES: Symbol = symbol_short!("SHARES");
+const PENDING_ADMIN: Symbol = symbol_short!("PADMIN");
 const SECONDS_PER_DAY: u64 = 86_400;
 const SECONDS_PER_WEEK: u64 = 604_800;
 
@@ -146,6 +147,14 @@ pub enum DataKey {
     MeterBalance(String),
 }
 
+/// Combined view returned by get_meter_full — meter state plus its balance
+/// in a single query, eliminating the need for two separate RPC calls.
+#[contracttype]
+pub struct MeterView {
+    pub meter: Meter,
+    pub balance: i128,
+}
+
 // ── Event topics (contract namespace) ────────────────────────────────────────
 
 const EVT_NS: Symbol = symbol_short!("solargrid");
@@ -251,6 +260,60 @@ impl SolarGridContract {
             .unwrap_or_else(|| vec![&env]))
     }
 
+    /// Transfer meter ownership from the current owner to a new owner.
+    /// Both the current owner and the new owner must authorize this call.
+    /// The new owner must already be on the allowlist.
+    pub fn transfer_meter_ownership(
+        env: Env,
+        meter_id: String,
+        new_owner: Address,
+    ) -> Result<(), ContractError> {
+        let key = DataKey::Meter(meter_id.clone());
+        let mut meter = Self::get_meter_or_error(&env, &key)?;
+
+        meter.owner.require_auth();
+        new_owner.require_auth();
+
+        let allowlist = Self::get_allowlist(env.clone())?;
+        if !allowlist.contains(&new_owner) {
+            return Err(ContractError::OwnerNotAllowlisted);
+        }
+
+        // Remove meter_id from old owner's index
+        let old_key = DataKey::OwnerMeters(meter.owner.clone());
+        let old_list: Vec<String> = env
+            .storage()
+            .persistent()
+            .get(&old_key)
+            .unwrap_or_else(|| vec![&env]);
+        let mut filtered: Vec<String> = vec![&env];
+        for id in old_list.iter() {
+            if id != meter_id {
+                filtered.push_back(id);
+            }
+        }
+        env.storage().persistent().set(&old_key, &filtered);
+
+        // Add meter_id to new owner's index
+        let new_key = DataKey::OwnerMeters(new_owner.clone());
+        let mut new_list: Vec<String> = env
+            .storage()
+            .persistent()
+            .get(&new_key)
+            .unwrap_or_else(|| vec![&env]);
+        new_list.push_back(meter_id.clone());
+        env.storage().persistent().set(&new_key, &new_list);
+
+        meter.owner = new_owner.clone();
+        env.storage().persistent().set(&key, &meter);
+
+        env.events().publish(
+            (EVT_NS, symbol_short!("mtr_xfer"), meter_id),
+            new_owner,
+        );
+        Ok(())
+    }
+
     /// Get all registered meters (admin only).
     /// Returns all Meter structs across the entire contract.
     /// Used by provider dashboard to display all active meters.
@@ -316,9 +379,15 @@ impl SolarGridContract {
     }
 
     /// Register the IoT oracle address. Only admin may call this.
+    /// Emits `ora_set` event with (old_oracle, new_oracle) for audit trail.
     pub fn set_oracle(env: Env, oracle: Address) -> Result<(), ContractError> {
         Self::require_admin(&env)?;
+        let old_oracle: Option<Address> = env.storage().instance().get(&ORACLE);
         env.storage().instance().set(&ORACLE, &oracle);
+        env.events().publish(
+            (EVT_NS, symbol_short!("ora_set")),
+            (old_oracle, oracle),
+        );
         Ok(())
     }
 
@@ -326,6 +395,15 @@ impl SolarGridContract {
     pub fn get_oracle(env: Env) -> Result<Option<Address>, ContractError> {
         Self::require_initialized(&env)?;
         Ok(env.storage().instance().get(&ORACLE))
+    }
+
+    /// Explicitly clear the oracle address. Only admin may call this.
+    /// Emits `ora_clr` event.
+    pub fn remove_oracle(env: Env) -> Result<(), ContractError> {
+        Self::require_admin(&env)?;
+        env.storage().instance().remove(&ORACLE);
+        env.events().publish((EVT_NS, symbol_short!("ora_clr")), ());
+        Ok(())
     }
 
     /// Make a payment to top up a meter's balance and activate it.
@@ -463,6 +541,22 @@ impl SolarGridContract {
         Ok(env.storage().persistent().get(&provider_key).unwrap_or(0))
     }
 
+    /// Return revenue balances for the admin and all collaborators. Admin-only.
+    pub fn get_revenue_summary(env: Env) -> Result<Map<Address, i128>, ContractError> {
+        Self::require_admin(&env)?;
+        let collabs: Vec<Address> = env.storage().instance().get(&COLLABS).unwrap_or(Vec::new(&env));
+        let admin = Self::get_admin(&env)?;
+
+        let mut result: Map<Address, i128> = Map::new(&env);
+        let admin_key = DataKey::ProviderRevenue(admin.clone());
+        result.set(admin.clone(), env.storage().persistent().get(&admin_key).unwrap_or(0));
+        for c in collabs.iter() {
+            let key = DataKey::ProviderRevenue(c.clone());
+            result.set(c, env.storage().persistent().get(&key).unwrap_or(0));
+        }
+        Ok(result)
+    }
+
     /// Check whether a meter currently has active energy access.
     pub fn check_access(env: Env, meter_id: String) -> Result<bool, ContractError> {
         let key = DataKey::Meter(meter_id.clone());
@@ -536,6 +630,15 @@ impl SolarGridContract {
     pub fn get_meter(env: Env, meter_id: String) -> Result<Meter, ContractError> {
         let key = DataKey::Meter(meter_id);
         Self::get_meter_or_error(&env, &key)
+    }
+
+    /// Get meter state and balance in one query.
+    pub fn get_meter_full(env: Env, meter_id: String) -> Result<MeterView, ContractError> {
+        let key = DataKey::Meter(meter_id.clone());
+        let meter = Self::get_meter_or_error(&env, &key)?;
+        let bal_key = DataKey::MeterBalance(meter_id);
+        let balance: i128 = env.storage().persistent().get(&bal_key).unwrap_or(0);
+        Ok(MeterView { meter, balance })
     }
 
     /// Admin can manually toggle meter access (e.g. maintenance).
@@ -685,6 +788,28 @@ impl SolarGridContract {
         Ok(result)
     }
 
+    /// Distribute `amount` stroops and perform the actual token transfers atomically.
+    /// Uses `distribute` internally to compute shares, then transfers to each collaborator.
+    /// Emits `distrib` event after all transfers succeed.
+    pub fn distribute_and_transfer(env: Env, amount: i128) -> Result<Map<Address, i128>, ContractError> {
+        Self::require_admin(&env)?;
+        if amount <= 0 {
+            return Err(ContractError::InvalidAmount);
+        }
+
+        let token_address = Self::get_token_address(&env)?;
+        let token = token::Client::new(&env, &token_address);
+
+        let payouts = Self::distribute(env.clone(), amount)?;
+        for (collaborator, payout) in payouts.iter() {
+            if payout > 0 {
+                token.transfer(&env.current_contract_address(), &collaborator, &payout);
+            }
+        }
+        env.events().publish((EVT_NS, symbol_short!("distrib")), (amount,));
+        Ok(payouts)
+    }
+
     // ── Internal helpers ──────────────────────────────────────────────────────
 
     fn write_initial_config(
@@ -823,8 +948,13 @@ impl SolarGridContract {
         }
         let key = DataKey::Meter(meter_id.clone());
         let mut meter = Self::get_meter_or_error(&env, &key)?;
+        let old_limit = meter.daily_limit;
         meter.daily_limit = limit;
         env.storage().persistent().set(&key, &meter);
+        env.events().publish(
+            (EVT_NS, symbol_short!("lmt_set"), meter_id),
+            (old_limit, limit),
+        );
         Ok(())
     }
 
@@ -832,7 +962,13 @@ impl SolarGridContract {
     /// Admin-only. Use migrate_meter_to_v2 for v1 → v2 migrations.
     pub fn migrate_meter(env: Env, meter_id: String) -> Result<(), ContractError> {
         Self::require_admin(&env)?;
-        let key = DataKey::Meter(meter_id);
+        let key = DataKey::Meter(meter_id.clone());
+        // Already at v2 — idempotent no-op.
+        if let Some(meter) = env.storage().persistent().get::<DataKey, Meter>(&key) {
+            if meter.version >= 2 {
+                return Ok(());
+            }
+        }
         let legacy: LegacyMeter = env
             .storage()
             .persistent()
@@ -846,7 +982,13 @@ impl SolarGridContract {
     /// Migrate a meter from v1 (LegacyMeterV1) to v2 (Meter) schema. Admin-only.
     pub fn migrate_meter_to_v2(env: Env, meter_id: String) -> Result<(), ContractError> {
         Self::require_admin(&env)?;
-        let key = DataKey::Meter(meter_id);
+        let key = DataKey::Meter(meter_id.clone());
+        // Already at v2 — idempotent no-op.
+        if let Some(meter) = env.storage().persistent().get::<DataKey, Meter>(&key) {
+            if meter.version >= 2 {
+                return Ok(());
+            }
+        }
         let legacy: LegacyMeterV1 = env
             .storage()
             .persistent()
@@ -1806,15 +1948,35 @@ mod tests {
         // Run the migration.
         client.migrate_meter(&meter_id);
 
-        // The entry should now deserialize as a v1 Meter.
+        // The entry should now deserialize as a v2 Meter.
         let meter = client.get_meter(&meter_id);
-        assert_eq!(meter.version, 1);
+        assert_eq!(meter.version, 2);
         assert_eq!(meter.owner, owner);
         assert!(meter.active);
         assert_eq!(meter.units_used, 42);
         assert_eq!(meter.plan, PaymentPlan::UsageBased);
         assert_eq!(meter.last_payment, 1_000);
         assert_eq!(meter.expires_at, u64::MAX);
+    }
+
+    /// Calling migrate_meter on an already-migrated v2 meter is idempotent.
+    #[test]
+    fn test_migrate_meter_idempotent_on_v2() {
+        let (env, client, _admin) = setup();
+        let user = Address::generate(&env);
+        let meter_id = symbol_short!("MIG_IDP");
+
+        // Register creates a v2 meter.
+        allowlist_and_register(&client, &meter_id, &user);
+        let before = client.get_meter(&meter_id);
+        assert_eq!(before.version, 2);
+
+        // Calling migrate_meter again must succeed and leave the entry unchanged.
+        client.migrate_meter(&meter_id);
+        let after = client.get_meter(&meter_id);
+        assert_eq!(after.version, 2);
+        assert_eq!(after.owner, before.owner);
+        assert_eq!(after.units_used, before.units_used);
     }
 
     /// get_all_shares returns the full map in one call.

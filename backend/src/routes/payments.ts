@@ -91,12 +91,13 @@ async function fetchPaymentEvents(
     limit: 1000,
   });
 
+  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
   const events: PaymentRecord[] = [];
 
   for (const event of response?.events ?? []) {
     try {
       const record = parsePaymentEvent(event, address);
-      if (record) events.push(record);
+      if (record && new Date(record.date).getTime() >= cutoff) events.push(record);
     } catch {
       // skip malformed events
     }
@@ -109,6 +110,11 @@ async function fetchPaymentEvents(
   });
 
   return events;
+  } catch (err: any) {
+    const rpcErr: any = new Error(err.message ?? "RPC request failed");
+    rpcErr.isRpcError = true;
+    throw rpcErr;
+  }
 }
 
 function parsePaymentEvent(
