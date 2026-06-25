@@ -120,6 +120,7 @@ export function validateRequest(schemas: RequestSchemaSet): RequestHandler {
     if (Object.keys(details).length > 0) {
       return res.status(400).json({
         error: "Validation failed",
+        code: "VALIDATION_ERROR",
         details,
       });
     }
