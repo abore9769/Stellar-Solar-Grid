@@ -165,7 +165,9 @@ app.listen(PORT, () => {
   initUsageEventStore();
   startUsageEventRetryWorker();
   logger.info("SolarGrid backend listening", { port: PORT });
-  startIoTBridge().catch(err => {
+  try {
+    startIoTBridge();
+  } catch (err) {
     logger.error("Failed to start IoT bridge", { err });
-  });
+  }
 });

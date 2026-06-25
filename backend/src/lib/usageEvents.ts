@@ -38,7 +38,10 @@ type CreateUsageEventInput = {
   sourceTopic?: string | null;
 };
 
-const db = openDatabase();
+// Cast needed: `moduleResolution: node16` resolves better-sqlite3's export= type
+// such that the instance type loses its namespace-declared methods at this call site.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+const db = openDatabase() as any;
 let retryTimer: NodeJS.Timeout | undefined;
 let retryInFlight = false;
 const activeSubmissionIds = new Set<number>();

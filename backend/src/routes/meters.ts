@@ -74,6 +74,22 @@ export function createMeterRouter(stellar: StellarService) {
     }),
   );
 
+  /** GET /api/meters/owner/:address — list all meters for an owner (must be before /:id) */
+  meterRouter.get(
+    "/owner/:address",
+    asyncHandler(async (req, res) => {
+      try {
+        StellarSdk.StrKey.decodeEd25519PublicKey(req.params.address);
+      } catch {
+        return res.status(400).json({ error: "Invalid Stellar address" });
+      }
+      const result = await stellar.query("get_meters_by_owner", [
+        StellarSdk.nativeToScVal(req.params.address, { type: "address" }),
+      ]);
+      res.json({ meters: StellarSdk.scValToNative(result), owner: req.params.address });
+    }),
+  );
+
   /** GET /api/meters/:id — get meter status */
   meterRouter.get(
     "/:id",
@@ -185,14 +201,20 @@ export function createMeterRouter(stellar: StellarService) {
     }
   });
 
-  /** GET /api/meters/owner/:address — list all meters for an owner */
-  meterRouter.get(
-    "/owner/:address",
+  /** POST /api/meters/:id/set-daily-limit — admin sets daily spending limit for a meter */
+  meterRouter.post(
+    "/:id/set-daily-limit",
+    requireAdminKey,
     asyncHandler(async (req, res) => {
-      const result = await stellar.query("get_meters_by_owner", [
-        StellarSdk.nativeToScVal(req.params.address, { type: "address" }),
+      const limit = Number(req.body.limit);
+      if (!Number.isInteger(limit) || limit < 0) {
+        return res.status(400).json({ error: "limit must be a non-negative integer (stroops)" });
+      }
+      const hash = await stellar.invoke("set_daily_limit", [
+        StellarSdk.nativeToScVal(req.params.id, { type: "symbol" }),
+        StellarSdk.nativeToScVal(BigInt(limit), { type: "i128" }),
       ]);
-      res.json({ meters: StellarSdk.scValToNative(result) });
+      res.json({ hash, meter_id: req.params.id, daily_limit: limit });
     }),
   );
 

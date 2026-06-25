@@ -134,7 +134,7 @@ export async function processMqttMessage(topic: string, payload: Buffer) {
       txHash: event.on_chain_tx_hash,
     });
     // Check if balance is low after usage update
-    checkAndNotifyLowBalance(meterId);
+    void checkAndNotifyLowBalance(meterId);
   } else {
     logger.warn("Usage event queued for retry", {
       meterId,
