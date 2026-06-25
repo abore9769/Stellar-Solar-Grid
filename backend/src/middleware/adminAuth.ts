@@ -1,3 +1,13 @@
+﻿import { Request, Response, NextFunction } from 'express';
+
+export function requireAdminKey(
+  req: Request,
+  res: Response,
+  next: NextFunction
+) {
+  const key = process.env.ADMIN_API_KEY;
+  if (!key) return next();
+  if (req.headers['x-admin-key'] !== key) {
 import { Request, Response, NextFunction } from 'express';
 import { logger } from '../lib/logger.js';
 

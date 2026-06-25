@@ -1,4 +1,4 @@
-import "dotenv/config";
+﻿import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import timeout from "connect-timeout";
@@ -12,6 +12,7 @@ import { allowlistRouter } from "./routes/allowlist.js";
 import { collaboratorRouter } from "./routes/collaborators.js";
 import { statsRouter } from "./routes/stats.js";
 import { startIoTBridge } from "./iot/bridge.js";
+import { requestLogger } from "./middleware/index.js";
 import { logger } from "./lib/logger.js";
 import requestLogger from "./middleware/requestLogger.js";
 import { register } from "./lib/metrics.js";
@@ -19,10 +20,17 @@ import {
   initUsageEventStore,
   startUsageEventRetryWorker,
 } from "./lib/usageEvents.js";
+import { logger } from "./lib/logger.js";
+import { register } from "./lib/metrics.js";
 
 const REQUIRED_ENV = ["CONTRACT_ID", "ADMIN_SECRET_KEY", "STELLAR_RPC_URL", "MQTT_BROKER"];
 const PORT = process.env.PORT ?? 3001;
 
+app.use(express.json());
+app.use(requestLogger);
+app.use((_, res, next) => {
+  res.setHeader("Access-Control-Allow-Origin", "*");
+  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 const missing = REQUIRED_ENV.filter((k) => !process.env[k]);
 if (missing.length > 0) {
   logger.fatal(
@@ -123,6 +131,11 @@ app.get("/metrics", async (_req, res) => {
   res.end(await register.metrics());
 });
 
+// 404 catch-all — must come after all routes
+app.use((_req: Request, res: Response) =>
+  res.status(404).json({ error: "Route not found", code: "NOT_FOUND" })
+);
+
 // Timeout error handler — must come before the generic error handler
 app.use((err: any, req: any, res: any, next: any) => {
   if (req.timedout) {
@@ -131,33 +144,30 @@ app.use((err: any, req: any, res: any, next: any) => {
       path: req.path,
       timeout: requestTimeout,
     });
-    return res.status(504).json({ error: 'Request timed out' });
+    return res.status(504).json({ error: "Request timed out", code: "TIMEOUT" });
   }
   next(err);
 });
 
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
-  logger.error("Request error", { error: err.message });
+  logger.error({ error: err.message, stack: err.stack }, "Unhandled error");
 
-  const parseError = err as Error & {
-    type?: string;
-    status?: number;
-    body?: unknown;
-  };
-  if (
-    parseError.type === "entity.parse.failed" ||
-    (err instanceof SyntaxError && typeof parseError.body !== "undefined") ||
-    parseError.status === 400
-  ) {
-    return res.status(400).json({ error: "Invalid JSON request body" });
+  const e = err as any;
+  if (e.type === "entity.parse.failed" || (err instanceof SyntaxError && e.body !== undefined)) {
+    return res.status(400).json({ error: "Invalid JSON body", code: "INVALID_JSON" });
   }
-
-  return res
-    .status(500)
-    .json({ error: err.message || "Internal server error" });
+  if (e.status === 404) {
+    return res.status(404).json({ error: "Resource not found", code: "NOT_FOUND" });
+  }
+  if (e.code === "VALIDATION_ERROR" && e.details) {
+    return res.status(400).json({ error: "Validation failed", code: "VALIDATION_ERROR", details: e.details });
+  }
+  res.status(500).json({ error: err.message || "Internal server error", code: "INTERNAL_ERROR" });
 });
 
 app.listen(PORT, () => {
+  console.log(`SolarGrid backend running on port ${PORT}`);
+  startIoTBridge();
   logger.info(
     { port: PORT, network: process.env.STELLAR_NETWORK ?? "testnet" },
     "SolarGrid backend started"
