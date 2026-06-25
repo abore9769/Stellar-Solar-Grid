@@ -2,9 +2,9 @@
 
 import { useState } from "react";
 
-const SMS_SHORTCODE = import.meta.env.VITE_SMS_SHORTCODE ?? "20880";
+const SMS_SHORTCODE = process.env.NEXT_PUBLIC_SMS_SHORTCODE ?? "20880";
 const SMS_WEBHOOK_DOCS =
-  import.meta.env.VITE_SMS_WEBHOOK_DOCS ??
+  process.env.NEXT_PUBLIC_SMS_WEBHOOK_DOCS ??
   "https://github.com/damiedee96/Stellar-Solar-Grid/blob/main/backend/README.md";
 
 interface Props {

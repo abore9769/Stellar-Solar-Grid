@@ -13,7 +13,7 @@ import { useToast } from "@/components/ToastProvider";
 
 const STROOPS_PER_XLM = 10_000_000n;
 
-const API = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:3001";
+const API = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:3001";
 const BALANCE_POLL_INTERVAL_MS = 30_000; // 30 seconds
 
 function stroopsToXlm(stroops: bigint): string {
