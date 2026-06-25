@@ -1,13 +1,15 @@
-import "dotenv/config";
+﻿import "dotenv/config";
 import express from "express";
 import { meterRouter } from "./routes/meters.js";
 import { paymentsRouter } from "./routes/payments.js";
 import { startIoTBridge } from "./iot/bridge.js";
+import { requestLogger } from "./middleware/index.js";
 
 const app = express();
 const PORT = process.env.PORT ?? 3001;
 
 app.use(express.json());
+app.use(requestLogger);
 app.use((_, res, next) => {
   res.setHeader("Access-Control-Allow-Origin", "*");
   res.setHeader("Access-Control-Allow-Headers", "Content-Type");
@@ -20,6 +22,6 @@ app.use("/api/payments", paymentsRouter);
 app.get("/health", (_, res) => res.json({ status: "ok" }));
 
 app.listen(PORT, () => {
-  console.log(`🌞 SolarGrid backend running on port ${PORT}`);
+  console.log(`SolarGrid backend running on port ${PORT}`);
   startIoTBridge();
 });
