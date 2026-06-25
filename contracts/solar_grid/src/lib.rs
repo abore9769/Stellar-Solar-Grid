@@ -36,6 +36,7 @@ const ORACLE: Symbol = symbol_short!("ORACLE");
 const METER_LIST: Symbol = symbol_short!("MLIST");
 const COLLABS: Symbol = symbol_short!("COLLABS");
 const SHARES: Symbol = symbol_short!("SHARES");
+const PENDING_ADMIN: Symbol = symbol_short!("PADMIN");
 const SECONDS_PER_DAY: u64 = 86_400;
 const SECONDS_PER_WEEK: u64 = 604_800;
 
@@ -144,6 +145,14 @@ pub enum DataKey {
     OwnerMeters(Address),
     ProviderRevenue(Address),
     MeterBalance(String),
+}
+
+/// Combined view returned by get_meter_full — meter state plus its balance
+/// in a single query, eliminating the need for two separate RPC calls.
+#[contracttype]
+pub struct MeterView {
+    pub meter: Meter,
+    pub balance: i128,
 }
 
 // ── Event topics (contract namespace) ────────────────────────────────────────
@@ -623,6 +632,15 @@ impl SolarGridContract {
         Self::get_meter_or_error(&env, &key)
     }
 
+    /// Get meter state and balance in one query.
+    pub fn get_meter_full(env: Env, meter_id: String) -> Result<MeterView, ContractError> {
+        let key = DataKey::Meter(meter_id.clone());
+        let meter = Self::get_meter_or_error(&env, &key)?;
+        let bal_key = DataKey::MeterBalance(meter_id);
+        let balance: i128 = env.storage().persistent().get(&bal_key).unwrap_or(0);
+        Ok(MeterView { meter, balance })
+    }
+
     /// Admin can manually toggle meter access (e.g. maintenance).
     ///
     /// # Panics
@@ -930,8 +948,13 @@ impl SolarGridContract {
         }
         let key = DataKey::Meter(meter_id.clone());
         let mut meter = Self::get_meter_or_error(&env, &key)?;
+        let old_limit = meter.daily_limit;
         meter.daily_limit = limit;
         env.storage().persistent().set(&key, &meter);
+        env.events().publish(
+            (EVT_NS, symbol_short!("lmt_set"), meter_id),
+            (old_limit, limit),
+        );
         Ok(())
     }
 
