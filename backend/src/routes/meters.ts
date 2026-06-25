@@ -8,6 +8,7 @@ import {
 import { asyncHandler } from "../lib/asyncHandler.js";
 import { validateRequest, RegisterMeterSchema } from "../lib/validation.js";
 import { requireAdminKey } from "../middleware/adminAuth.js";
+import { cacheFor, invalidateCache } from "../middleware/cache.js";
 
 const balanceCache = new Map<string, { data: any; ts: number }>();
 const BALANCE_CACHE_TTL_MS = 5_000; // 5-second cache to reduce RPC load
@@ -93,6 +94,7 @@ export function createMeterRouter(stellar: StellarService) {
   /** GET /api/meters/:id — get meter status */
   meterRouter.get(
     "/:id",
+    cacheFor(5_000),
     asyncHandler(async (req, res) => {
       const result = await stellar.query("get_meter", [
         StellarSdk.nativeToScVal(req.params.id, { type: "symbol" }),
@@ -104,6 +106,7 @@ export function createMeterRouter(stellar: StellarService) {
   /** GET /api/meters/:id/access — check if meter is active */
   meterRouter.get(
     "/:id/access",
+    cacheFor(5_000),
     asyncHandler(async (req, res) => {
       const result = await stellar.query("check_access", [
         StellarSdk.nativeToScVal(req.params.id, { type: "symbol" }),
@@ -123,7 +126,7 @@ export function createMeterRouter(stellar: StellarService) {
           StellarSdk.nativeToScVal(meterId, { type: "symbol" }),
         ]);
       } catch {
-        return res.status(404).json({ error: "Meter not found" });
+        return res.status(404).json({ error: "Meter not found", code: "NOT_FOUND" });
       }
       const hash = await stellar.invoke("set_active", [
         StellarSdk.nativeToScVal(meterId, { type: "symbol" }),
@@ -144,7 +147,7 @@ export function createMeterRouter(stellar: StellarService) {
           StellarSdk.nativeToScVal(meterId, { type: "symbol" }),
         ]);
       } catch {
-        return res.status(404).json({ error: "Meter not found" });
+        return res.status(404).json({ error: "Meter not found", code: "NOT_FOUND" });
       }
       const hash = await stellar.invoke("set_active", [
         StellarSdk.nativeToScVal(meterId, { type: "symbol" }),
@@ -180,7 +183,7 @@ export function createMeterRouter(stellar: StellarService) {
         balanceCache.set(meterId, { data: payload, ts: Date.now() });
         res.json(payload);
       } catch (err: any) {
-        res.status(404).json({ error: "Meter not found" });
+        res.status(404).json({ error: "Meter not found", code: "NOT_FOUND" });
       }
     }),
   );
@@ -197,7 +200,7 @@ export function createMeterRouter(stellar: StellarService) {
       const history = getUsageHistory(req.params.id, page, pageSize);
       res.json(history);
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: err.message, code: "INTERNAL_ERROR" });
     }
   });
 
@@ -239,22 +242,22 @@ export function createMeterRouter(stellar: StellarService) {
     const { units, cost } = req.body as { units: unknown; cost: unknown };
 
     if (units == null || cost == null) {
-      return res.status(400).json({ error: "units and cost are required" });
+      return res.status(400).json({ error: "units and cost are required", code: "VALIDATION_ERROR" });
     }
 
     const unitsNum = Number(units);
     const costNum = Number(cost);
 
     if (!Number.isFinite(unitsNum) || !Number.isFinite(costNum)) {
-      return res.status(400).json({ error: "units and cost must be valid numbers" });
+      return res.status(400).json({ error: "units and cost must be valid numbers", code: "VALIDATION_ERROR" });
     }
 
     if (!Number.isInteger(unitsNum) || !Number.isInteger(costNum)) {
-      return res.status(400).json({ error: "units and cost must be integers" });
+      return res.status(400).json({ error: "units and cost must be integers", code: "VALIDATION_ERROR" });
     }
 
     if (unitsNum <= 0 || costNum <= 0) {
-      return res.status(400).json({ error: "units and cost must be positive" });
+      return res.status(400).json({ error: "units and cost must be positive", code: "VALIDATION_ERROR" });
     }
 
     try {
@@ -265,13 +268,15 @@ export function createMeterRouter(stellar: StellarService) {
         sourceTopic: null,
       });
 
+      invalidateCache(`/api/meters/${req.params.id}`);
+
       res.json({
         event,
         hash: event.on_chain_tx_hash,
         queued: !event.on_chain_tx_hash,
       });
     } catch (err: any) {
-      res.status(500).json({ error: err.message });
+      res.status(500).json({ error: err.message, code: "INTERNAL_ERROR" });
     }
   });
 

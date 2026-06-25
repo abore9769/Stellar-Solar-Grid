@@ -125,6 +125,11 @@ app.get("/metrics", async (_req, res) => {
   res.end(await register.metrics());
 });
 
+// 404 catch-all — must come after all routes
+app.use((_req: Request, res: Response) =>
+  res.status(404).json({ error: "Route not found", code: "NOT_FOUND" })
+);
+
 // Timeout error handler — must come before the generic error handler
 app.use((err: any, req: any, res: any, next: any) => {
   if (req.timedout) {
@@ -133,30 +138,25 @@ app.use((err: any, req: any, res: any, next: any) => {
       path: req.path,
       timeout: requestTimeout,
     });
-    return res.status(504).json({ error: 'Request timed out' });
+    return res.status(504).json({ error: "Request timed out", code: "TIMEOUT" });
   }
   next(err);
 });
 
 app.use((err: Error, _req: Request, res: Response, _next: NextFunction) => {
-  logger.error("Request error", { error: err.message });
+  logger.error({ error: err.message, stack: err.stack }, "Unhandled error");
 
-  const parseError = err as Error & {
-    type?: string;
-    status?: number;
-    body?: unknown;
-  };
-  if (
-    parseError.type === "entity.parse.failed" ||
-    (err instanceof SyntaxError && typeof parseError.body !== "undefined") ||
-    parseError.status === 400
-  ) {
-    return res.status(400).json({ error: "Invalid JSON request body" });
+  const e = err as any;
+  if (e.type === "entity.parse.failed" || (err instanceof SyntaxError && e.body !== undefined)) {
+    return res.status(400).json({ error: "Invalid JSON body", code: "INVALID_JSON" });
   }
-
-  return res
-    .status(500)
-    .json({ error: err.message || "Internal server error" });
+  if (e.status === 404) {
+    return res.status(404).json({ error: "Resource not found", code: "NOT_FOUND" });
+  }
+  if (e.code === "VALIDATION_ERROR" && e.details) {
+    return res.status(400).json({ error: "Validation failed", code: "VALIDATION_ERROR", details: e.details });
+  }
+  res.status(500).json({ error: err.message || "Internal server error", code: "INTERNAL_ERROR" });
 });
 
 app.listen(PORT, () => {
