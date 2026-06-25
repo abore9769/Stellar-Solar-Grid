@@ -42,8 +42,7 @@ paymentsRouter.get(
       Math.max(1, parseInt((req.query.limit as string) ?? "10", 10)),
     );
     const sort = req.query.sort === "asc" ? "asc" : "desc";
-    const defaultLookback = parseInt(process.env.PAYMENT_LOOKBACK_DAYS ?? "30", 10);
-    const days = Math.max(1, parseInt((req.query.days as string) ?? String(defaultLookback), 10));
+    const days = Math.min(90, Math.max(1, parseInt((req.query.days as string) ?? "30", 10)));
 
     try {
       StellarSdk.StrKey.decodeEd25519PublicKey(address);
@@ -62,6 +61,10 @@ paymentsRouter.get(
         pagination: { page, limit, total, pages: Math.ceil(total / limit) },
       });
     } catch (err: any) {
+      console.error("payments route error:", err);
+      if (err?.code === 'RPC_ERROR' || err?.isRpcError) {
+        return res.status(502).json({ error: err.message ?? "RPC request failed", code: "RPC_ERROR" });
+      }
       return res.status(500).json({ error: err.message ?? "Failed to fetch payment history" });
     }
   }),
@@ -72,18 +75,15 @@ paymentsRouter.get(
 async function fetchPaymentEvents(
   address: string,
   sort: "asc" | "desc",
-  days: number,
+  days = 30,
 ): Promise<PaymentRecord[]> {
-  const EVT_NS = StellarSdk.xdr.ScVal.scvSymbol("solargrid").toXDR("base64");
-  const ACTION = StellarSdk.xdr.ScVal.scvSymbol("payment").toXDR("base64");
-
-  const LEDGERS_PER_DAY = 17_280;
-  const latestLedger = await server.getLatestLedger();
-  const startLedger = Math.max(1, latestLedger.sequence - days * LEDGERS_PER_DAY);
-
+  // Query Soroban RPC for contract events within the requested day window
   try {
+    const EVT_NS = StellarSdk.xdr.ScVal.scvSymbol("solargrid").toXDR("base64");
+    const ACTION = StellarSdk.xdr.ScVal.scvSymbol("payment").toXDR("base64");
+
     const response = await (server as any).getEvents({
-      startLedger,
+      startLedger: 1,
       filters: [
         {
           type: "contract",

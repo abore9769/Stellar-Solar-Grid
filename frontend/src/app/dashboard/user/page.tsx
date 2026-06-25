@@ -6,6 +6,7 @@ import Navbar from "@/components/Navbar";
 import { SkeletonCard } from "@/components/SkeletonCard";
 import { Skeleton } from "@/components/Skeleton";
 import UsageChart, { type UsageDataPoint } from "@/components/UsageChart";
+import { SkeletonCard } from "@/components/SkeletonCard";
 import { useWalletStore } from "@/store/walletStore";
 import { getMeter, getMetersByOwner, type MeterData } from "@/services/meterService";
 import { parseWalletError } from "@/lib/errors";
@@ -13,7 +14,7 @@ import { useToast } from "@/components/ToastProvider";
 
 const STROOPS_PER_XLM = 10_000_000n;
 
-const API = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:3001";
+const API = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:3001";
 const BALANCE_POLL_INTERVAL_MS = 30_000; // 30 seconds
 
 function stroopsToXlm(stroops: bigint): string {

@@ -68,13 +68,13 @@ export default function PayPage() {
     localStorage.setItem("preferredCurrency", newCurrency);
   };
 
-  const EXPLORER_BASE = import.meta.env.VITE_NETWORK_PASSPHRASE?.includes("Test")
+  const EXPLORER_BASE = process.env.NEXT_PUBLIC_NETWORK_PASSPHRASE?.includes("Test")
     ? "https://stellar.expert/explorer/testnet/tx"
     : "https://stellar.expert/explorer/public/tx";
 
   async function handlePay(e: React.FormEvent) {
     e.preventDefault();
-    if (!address) return;
+    if (isOffline || !address) return;
 
     const amountNum = parseFloat(amount);
     if (!meterId.trim() || isNaN(amountNum) || amountNum <= 0) return;
@@ -84,6 +84,15 @@ export default function PayPage() {
   }
 
   async function confirmPayment() {
+    if (isOffline) {
+      showToast({
+        variant: "error",
+        title: "Offline",
+        description: "Blockchain payments unavailable offline.",
+      });
+      setShowSmsModal(true);
+      return;
+    }
     if (!address) return;
     setShowConfirm(false);
     setStatus("loading");
