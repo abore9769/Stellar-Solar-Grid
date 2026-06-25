@@ -19,8 +19,7 @@ import {
   initUsageEventStore,
   startUsageEventRetryWorker,
 } from "./lib/usageEvents.js";
-import { logger } from "./lib/logger.js";
-import { register } from "./lib/metrics.js";
+import { metricsRouter } from "./routes/metrics.js";
 
 const REQUIRED_ENV = ["CONTRACT_ID", "ADMIN_SECRET_KEY", "STELLAR_RPC_URL", "MQTT_BROKER"];
 const PORT = process.env.PORT ?? 3001;
@@ -76,6 +75,7 @@ app.use("/api/webhooks", webhookRouter);
 app.use("/api/allowlist", allowlistRouter);
 app.use("/api/collaborators", collaboratorRouter);
 app.use("/api/stats", statsRouter);
+app.use("/api/metrics", metricsRouter);
 
 app.get('/health', async (_req, res) => {
   const checks: Record<string, string> = {};
