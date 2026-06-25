@@ -18,3 +18,25 @@ export async function getCollaborators(contractId: string): Promise<Collaborator
   const { collaborators } = (await res.json()) as { collaborators: CollaboratorShare[] };
   return collaborators;
 }
+
+export async function addCollaborator(address: string, basisPoints: number): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/collaborators`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ address, basis_points: basisPoints }),
+  });
+  if (!res.ok) {
+    const { error } = (await res.json()) as { error: string };
+    throw new Error(error ?? "Failed to add collaborator");
+  }
+}
+
+export async function removeCollaborator(address: string): Promise<void> {
+  const res = await fetch(`${API_BASE}/api/collaborators/${address}`, {
+    method: "DELETE",
+  });
+  if (!res.ok) {
+    const { error } = (await res.json()) as { error: string };
+    throw new Error(error ?? "Failed to remove collaborator");
+  }
+}

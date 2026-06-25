@@ -9,7 +9,11 @@
  */
 
 import mqtt from "mqtt";
+import * as StellarSdk from "@stellar/stellar-sdk";
 import { persistAndSubmitUsageEvent } from "../lib/usageEvents.js";
+import { logger } from "../lib/logger.js";
+import { adminInvoke, server, CONTRACT_ID } from "../lib/stellar.js";
+import { mqttMessages } from "../lib/metrics.js";
 
 const BROKER = process.env.MQTT_BROKER ?? "mqtt://localhost:1883";
 const TOPIC = "solargrid/meters/+/usage";
@@ -64,7 +68,7 @@ function startMqttBridge() {
     });
   });
 
-  client.on("message", (topic, payload) => {
+  client.on("message", async (topic, payload) => {
     mqttMessages.inc();
     try {
       const meterId = topic.split("/")[2];

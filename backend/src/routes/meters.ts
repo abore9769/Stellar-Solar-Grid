@@ -5,6 +5,8 @@ import {
   getUsageHistory,
   persistAndSubmitUsageEvent,
 } from "../lib/usageEvents.js";
+import { asyncHandler } from "../lib/asyncHandler.js";
+import { validateRequest, RegisterMeterSchema } from "../lib/validation.js";
 
 export const meterRouter = Router();
 
@@ -91,8 +93,4 @@ meterRouter.post("/:id/usage", async (req, res) => {
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
-
-  paymentVolume.inc(amount_stroops / 10_000_000);
-  activeMeters.inc();
-  res.json({ hash });
-}));
+});

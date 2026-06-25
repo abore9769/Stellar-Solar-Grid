@@ -4,9 +4,11 @@ import { useEffect, useState, useCallback, useMemo } from "react";
 import Link from "next/link";
 import Navbar from "@/components/Navbar";
 import UsageChart, { type UsageDataPoint } from "@/components/UsageChart";
+import { SkeletonCard } from "@/components/SkeletonCard";
 import { useWalletStore } from "@/store/walletStore";
 import { getMeter, getMetersByOwner, type MeterData } from "@/services/meterService";
 import { parseWalletError } from "@/lib/errors";
+import { useToast } from "@/components/ToastProvider";
 
 const STROOPS_PER_XLM = 10_000_000n;
 

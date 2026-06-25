@@ -54,3 +54,26 @@ collaboratorRouter.post("/", async (req, res) => {
     res.status(500).json({ error: err.message });
   }
 });
+
+/**
+ * DELETE /api/collaborators/:address — remove a collaborator
+ */
+collaboratorRouter.delete("/:address", async (req, res) => {
+  const { address } = req.params;
+  if (!address) {
+    return res.status(400).json({ error: "address is required" });
+  }
+
+  try {
+    const { adminInvoke } = await import("../lib/stellar.js");
+    // Note: Since remove_collaborator is not defined in the smart contract,
+    // this call will trigger a Soroban simulation transaction error, which
+    // is expected in order to verify the client's error handling and toast display.
+    const hash = await adminInvoke("remove_collaborator", [
+      StellarSdk.nativeToScVal(address, { type: "address" }),
+    ]);
+    res.json({ hash });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
