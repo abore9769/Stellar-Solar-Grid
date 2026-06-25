@@ -47,7 +47,7 @@ webhookRouter.post(
       return res.status(401).json({ error: "Invalid webhook signature" });
     }
 
-    const { meter_id, amount_xlm } = req.body;
+    const { meter_id, amount_xlm, plan } = req.body;
 
     const stroops = BigInt(Math.round(amount_xlm * 10_000_000));
     const hash = await adminInvoke("make_payment", [
@@ -56,7 +56,7 @@ webhookRouter.post(
         type: "address",
       }),
       StellarSdk.nativeToScVal(stroops, { type: "i128" }),
-      StellarSdk.xdr.ScVal.scvVec([StellarSdk.xdr.ScVal.scvSymbol("Daily")]),
+      StellarSdk.nativeToScVal({ [plan]: null }),
     ]);
     paymentVolume.inc(amount_xlm);
     activeMeters.inc();

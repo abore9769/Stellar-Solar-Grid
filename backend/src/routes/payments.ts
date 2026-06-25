@@ -42,6 +42,8 @@ paymentsRouter.get(
       Math.max(1, parseInt((req.query.limit as string) ?? "10", 10)),
     );
     const sort = req.query.sort === "asc" ? "asc" : "desc";
+    const defaultLookback = parseInt(process.env.PAYMENT_LOOKBACK_DAYS ?? "30", 10);
+    const days = Math.max(1, parseInt((req.query.days as string) ?? String(defaultLookback), 10));
 
     try {
       StellarSdk.StrKey.decodeEd25519PublicKey(address);
@@ -50,7 +52,7 @@ paymentsRouter.get(
     }
 
     try {
-      const records = await fetchPaymentEvents(address, sort);
+      const records = await fetchPaymentEvents(address, sort, days);
       const total = records.length;
       const start = (page - 1) * limit;
       const paginated = records.slice(start, start + limit);
@@ -70,43 +72,48 @@ paymentsRouter.get(
 async function fetchPaymentEvents(
   address: string,
   sort: "asc" | "desc",
+  days: number,
 ): Promise<PaymentRecord[]> {
-  // Query Soroban RPC for contract events
   const EVT_NS = StellarSdk.xdr.ScVal.scvSymbol("solargrid").toXDR("base64");
   const ACTION = StellarSdk.xdr.ScVal.scvSymbol("payment").toXDR("base64");
 
-  const response = await (server as any).getEvents({
-    startLedger: 1,
-    filters: [
-      {
-        type: "contract",
-        contractIds: [CONTRACT_ID],
-        topics: [
-          [EVT_NS, ACTION],
-        ],
-      },
-    ],
-    limit: 1000,
-  });
+  const LEDGERS_PER_DAY = 17_280;
+  const latestLedger = await server.getLatestLedger();
+  const startLedger = Math.max(1, latestLedger.sequence - days * LEDGERS_PER_DAY);
 
-  const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
-  const events: PaymentRecord[] = [];
+  try {
+    const response = await (server as any).getEvents({
+      startLedger,
+      filters: [
+        {
+          type: "contract",
+          contractIds: [CONTRACT_ID],
+          topics: [
+            [EVT_NS, ACTION],
+          ],
+        },
+      ],
+      limit: 1000,
+    });
 
-  for (const event of response?.events ?? []) {
-    try {
-      const record = parsePaymentEvent(event, address);
-      if (record && new Date(record.date).getTime() >= cutoff) events.push(record);
-    } catch {
-      // skip malformed events
+    const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+    const events: PaymentRecord[] = [];
+
+    for (const event of response?.events ?? []) {
+      try {
+        const record = parsePaymentEvent(event, address);
+        if (record && new Date(record.date).getTime() >= cutoff) events.push(record);
+      } catch {
+        // skip malformed events
+      }
     }
-  }
 
-  events.sort((a, b) => {
-    const diff = new Date(a.date).getTime() - new Date(b.date).getTime();
-    return sort === "asc" ? diff : -diff;
-  });
+    events.sort((a, b) => {
+      const diff = new Date(a.date).getTime() - new Date(b.date).getTime();
+      return sort === "asc" ? diff : -diff;
+    });
 
-  return events;
+    return events;
   } catch (err: any) {
     const rpcErr: any = new Error(err.message ?? "RPC request failed");
     rpcErr.isRpcError = true;

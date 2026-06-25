@@ -63,6 +63,7 @@ export const SmsPaymentWebhookSchema = z
       .number()
       .positive("amount_xlm must be positive")
       .finite("amount_xlm must be a finite number"),
+    plan: PaymentPlanSchema.optional().default("Daily"),
   })
   .strict();
 
