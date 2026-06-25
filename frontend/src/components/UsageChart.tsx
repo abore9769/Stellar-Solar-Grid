@@ -84,6 +84,8 @@ function CustomTooltip({
 }
 
 // ── Main chart component ───────────────────────────────────────────────────────
+import styles from './UsageChart.module.css';
+
 export default function UsageChart({
   data,
   loading = false,
@@ -109,7 +111,7 @@ export default function UsageChart({
       </div>
 
       {/* Chart area — minHeight prevents the ResponsiveContainer 0-height flash */}
-      <div style={{ minHeight: "12rem" }}>
+      <div className={styles.chartContainer}>
         {loading ? (
           <ChartSkeleton />
         ) : isEmpty ? (
@@ -136,7 +138,11 @@ export default function UsageChart({
               />
               <Tooltip content={<CustomTooltip />} />
               <Legend
-                wrapperStyle={{ fontSize: "11px", color: "#9ca3af", paddingTop: "8px" }}
+                wrapperStyle={{
+                  fontSize: "11px",
+                  color: "#9ca3af", 
+                  paddingTop: "8px"
+                }}
               />
               <Line
                 type="monotone"

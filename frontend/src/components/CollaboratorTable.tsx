@@ -14,8 +14,9 @@ interface Props {
   onRemove: (address: string) => Promise<void>;
 }
 
-export default function CollaboratorTable({ collaborators, onAdd, onRemove }: Props) {
-  const { showToast } = useToast();
+import styles from './CollaboratorTable.module.css';
+
+export default function CollaboratorTable({ collaborators }: Props) {
   const [copied, setCopied] = useState<string | null>(null);
   const [newAddress, setNewAddress] = useState("");
   const [newBasisPoints, setNewBasisPoints] = useState("");
@@ -28,82 +29,16 @@ export default function CollaboratorTable({ collaborators, onAdd, onRemove }: Pr
     setTimeout(() => setCopied(null), 1500);
   }
 
-  function isValidStellarAddress(addr: string): boolean {
-    return /^G[A-Z2-7]{55}$/.test(addr);
-  }
-
-  async function handleAddSubmit(e: React.FormEvent) {
-    e.preventDefault();
-    const cleanAddress = newAddress.trim();
-    const bp = parseInt(newBasisPoints, 10);
-
-    if (!cleanAddress) {
-      showToast({
-        variant: "error",
-        title: "Validation Error",
-        description: "Address is required.",
-      });
-      return;
-    }
-
-    if (!isValidStellarAddress(cleanAddress)) {
-      showToast({
-        variant: "error",
-        title: "Validation Error",
-        description: "Invalid Stellar address. Must start with G and be 56 characters.",
-      });
-      return;
-    }
-
-    if (isNaN(bp) || bp <= 0 || bp > 10000) {
-      showToast({
-        variant: "error",
-        title: "Validation Error",
-        description: "Basis points must be a number between 1 and 10000 (100 = 1%).",
-      });
-      return;
-    }
-
-    const currentTotal = collaborators.reduce((acc, c) => acc + c.basisPoints, 0);
-    if (currentTotal + bp > 10000) {
-      showToast({
-        variant: "error",
-        title: "Validation Error",
-        description: `Cannot add share. Total shares would exceed 100% (${(currentTotal + bp) / 100}%).`,
-      });
-      return;
-    }
-
-    if (collaborators.some((c) => c.address.toLowerCase() === cleanAddress.toLowerCase())) {
-      showToast({
-        variant: "error",
-        title: "Validation Error",
-        description: "Collaborator address is already added.",
-      });
-      return;
-    }
-
-    setIsAdding(true);
-    try {
-      await onAdd(cleanAddress, bp);
-      setNewAddress("");
-      setNewBasisPoints("");
-    } catch (err) {
-      // Error handling is managed by parent dashboard toast, but we stop loading state
-    } finally {
-      setIsAdding(false);
-    }
-  }
-
-  async function handleRemove(address: string) {
-    setIsRemoving(address);
-    try {
-      await onRemove(address);
-    } catch (err) {
-      // Error handling is managed by parent dashboard toast
-    } finally {
-      setIsRemoving(null);
-    }
+  // Empty state — helpful message instead of silent null
+  if (!collaborators.length) {
+    return (
+      <div className="card">
+        <span className="badge">Collaborators</span>
+        <p className={`text-sm mt-2 ${styles.emptyMessage}`}>
+          No collaborators found. Initialize the contract to add collaborators.
+        </p>
+      </div>
+    );
   }
 
   return (
@@ -113,8 +48,7 @@ export default function CollaboratorTable({ collaborators, onAdd, onRemove }: Pr
         <thead>
           <tr>
             <th>Address</th>
-            <th>Share</th>
-            <th style={{ textAlign: "right" }}>Actions</th>
+            <th className="text-right">Share</th>
           </tr>
         </thead>
         <tbody>
@@ -145,9 +79,9 @@ export default function CollaboratorTable({ collaborators, onAdd, onRemove }: Pr
               </td>
 
               {/* Share bar with visible percentage label */}
-              <td>
-                <span className="share-label">
-                  {(c.basisPoints / 100).toFixed(2)}% ({c.basisPoints} bp)
+              <td className={styles.shareCell}>
+                <span className={styles.shareLabel}>
+                  {(c.basisPoints / 100).toFixed(2)}%
                 </span>
                 <div
                   className="share-bar"

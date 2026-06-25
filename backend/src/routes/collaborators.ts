@@ -1,6 +1,7 @@
 import { Router } from "express";
 import * as StellarSdk from "@stellar/stellar-sdk";
-import { contractQuery } from "../lib/stellar.js";
+import { contractQuery, adminInvoke } from "../lib/stellar.js";
+import { requireAdminKey } from "../middleware/adminAuth.js";
 
 export const collaboratorRouter = Router();
 
@@ -10,12 +11,12 @@ export interface CollaboratorShare {
 }
 
 /**
- * GET /api/collaborators/:contractId
+ * GET /api/collaborators
  *
  * Returns all collaborators and their shares in a single RPC simulation
  * of get_all_shares — eliminates the previous N+1 per-collaborator calls.
  */
-collaboratorRouter.get("/:contractId", async (req, res) => {
+collaboratorRouter.get("/", async (req, res) => {
   try {
     const raw = await contractQuery("get_all_shares", []);
     const shareMap = StellarSdk.scValToNative(raw) as Record<string, number>;
@@ -32,8 +33,9 @@ collaboratorRouter.get("/:contractId", async (req, res) => {
 
 /**
  * POST /api/collaborators — add a collaborator (admin only)
+ * Requires X-Admin-Key header.
  */
-collaboratorRouter.post("/", async (req, res) => {
+collaboratorRouter.post("/", requireAdminKey, async (req, res) => {
   const { address, basis_points } = req.body as {
     address: string;
     basis_points: number;
@@ -44,7 +46,6 @@ collaboratorRouter.post("/", async (req, res) => {
   }
 
   try {
-    const { adminInvoke } = await import("../lib/stellar.js");
     const hash = await adminInvoke("add_collaborator", [
       StellarSdk.nativeToScVal(address, { type: "address" }),
       StellarSdk.nativeToScVal(basis_points, { type: "u32" }),
@@ -56,19 +57,23 @@ collaboratorRouter.post("/", async (req, res) => {
 });
 
 /**
- * DELETE /api/collaborators/:address — remove a collaborator
+ * DELETE /api/collaborators/:address — remove a collaborator (admin only)
+ * Requires X-Admin-Key header.
+ * Validates the address is a valid Stellar Ed25519 public key before invoking
+ * the contract.
+ *
+ * Closes #343.
  */
-collaboratorRouter.delete("/:address", async (req, res) => {
+collaboratorRouter.delete("/:address", requireAdminKey, async (req, res) => {
   const { address } = req.params;
-  if (!address) {
-    return res.status(400).json({ error: "address is required" });
+
+  try {
+    StellarSdk.StrKey.decodeEd25519PublicKey(address);
+  } catch {
+    return res.status(400).json({ error: "Invalid Stellar address" });
   }
 
   try {
-    const { adminInvoke } = await import("../lib/stellar.js");
-    // Note: Since remove_collaborator is not defined in the smart contract,
-    // this call will trigger a Soroban simulation transaction error, which
-    // is expected in order to verify the client's error handling and toast display.
     const hash = await adminInvoke("remove_collaborator", [
       StellarSdk.nativeToScVal(address, { type: "address" }),
     ]);

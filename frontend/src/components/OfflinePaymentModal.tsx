@@ -2,9 +2,9 @@
 
 import { useState } from "react";
 
-const SMS_SHORTCODE = process.env.NEXT_PUBLIC_SMS_SHORTCODE ?? "20880";
+const SMS_SHORTCODE = import.meta.env.VITE_SMS_SHORTCODE ?? "20880";
 const SMS_WEBHOOK_DOCS =
-  process.env.NEXT_PUBLIC_SMS_WEBHOOK_DOCS ??
+  import.meta.env.VITE_SMS_WEBHOOK_DOCS ??
   "https://github.com/damiedee96/Stellar-Solar-Grid/blob/main/backend/README.md";
 
 interface Props {
@@ -20,6 +20,7 @@ const PLANS = [
 
 export default function OfflinePaymentModal({ meterId, onClose }: Props) {
   const [copied, setCopied] = useState(false);
+  const [copyFailed, setCopyFailed] = useState(false);
   const exampleMeter = meterId?.trim() || "METER1";
   const exampleSms = `PAY ${exampleMeter} 5 D`;
 
@@ -28,8 +29,23 @@ export default function OfflinePaymentModal({ meterId, onClose }: Props) {
       await navigator.clipboard.writeText(text);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
-    } catch {
-      // Clipboard API unavailable on some low-end browsers — silently ignore
+      return;
+    } catch {}
+    // Fallback for HTTP / low-end browsers
+    const el = document.createElement("textarea");
+    el.value = text;
+    el.style.position = "fixed";
+    el.style.opacity = "0";
+    document.body.appendChild(el);
+    el.focus();
+    el.select();
+    const ok = document.execCommand("copy");
+    document.body.removeChild(el);
+    if (ok) {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    } else {
+      setCopyFailed(true);
     }
   }
 
@@ -110,6 +126,19 @@ export default function OfflinePaymentModal({ meterId, onClose }: Props) {
                 {copied ? "✓ Copied" : "Copy"}
               </button>
             </div>
+            {copyFailed && (
+              <div className="mt-2">
+                <p className="text-xs text-yellow-400 mb-1">Could not copy automatically. Select and copy the text below:</p>
+                <textarea
+                  readOnly
+                  value={exampleSms}
+                  className="w-full rounded-md border border-yellow-500/40 bg-solar-dark px-3 py-2 text-sm text-solar-yellow font-mono resize-none"
+                  rows={2}
+                  onFocus={(e) => e.currentTarget.select()}
+                  aria-label="SMS text to copy manually"
+                />
+              </div>
+            )}
             <p className="mt-1.5 text-xs text-gray-500">
               Send to: <span className="text-solar-yellow font-bold">{SMS_SHORTCODE}</span>
             </p>

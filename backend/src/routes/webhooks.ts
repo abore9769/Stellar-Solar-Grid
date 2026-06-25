@@ -2,9 +2,12 @@ import { Router } from "express";
 import * as crypto from "crypto";
 import * as StellarSdk from "@stellar/stellar-sdk";
 import { adminInvoke } from "../lib/stellar.js";
-import { activeMeters, paymentVolume } from "../lib/metrics.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
-import { SmsPaymentWebhookSchema, validateRequest } from "../lib/validation.js";
+import { validateRequest } from "../lib/validation.js";
+import { logger } from "../lib/logger.js";
+import { activeMeters, paymentVolume } from "../lib/metrics.js";
+import { z } from "zod";
+import { SmsPaymentWebhookSchema } from "../lib/validation.js";
 
 export const webhookRouter = Router();
 
@@ -58,5 +61,37 @@ webhookRouter.post(
     paymentVolume.inc(amount_xlm);
     activeMeters.inc();
     return res.status(200).json({ hash });
+  }),
+);
+
+/**
+ * POST /api/webhooks/low-balance
+ *
+ * Register webhook URL for low-balance notifications.
+ * Providers can configure their webhook endpoint to receive alerts
+ * when a customer's meter balance drops below the threshold.
+ *
+ * Payload:
+ *   { "webhook_url": "https://example.com/webhook" }
+ */
+webhookRouter.post(
+  "/low-balance",
+  validateRequest({
+    body: z.object({
+      webhook_url: z.string().url("Invalid webhook URL format"),
+    }),
+  }),
+  asyncHandler(async (req, res) => {
+    const { webhook_url } = req.body;
+
+    // For now, store in environment variable (in production, use a database)
+    process.env.PROVIDER_WEBHOOK_URL = webhook_url;
+
+    logger.info("Low-balance webhook registered", { webhook_url });
+
+    return res.status(200).json({
+      message: "Webhook registered successfully",
+      webhook_url,
+    });
   }),
 );
