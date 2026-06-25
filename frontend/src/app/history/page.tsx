@@ -3,6 +3,7 @@
 import { useEffect, useState, useCallback } from "react";
 import Navbar from "@/components/Navbar";
 import { useWalletStore } from "@/store/walletStore";
+import { useToast } from "@/components/ToastProvider";
 import {
   getPaymentHistory,
   type PaymentRecord,
@@ -25,6 +26,7 @@ const PAGE_SIZE = 10;
 
 export default function HistoryPage() {
   const { address } = useWalletStore();
+  const { showToast } = useToast();
 
   const [records, setRecords] = useState<PaymentRecord[]>([]);
   const [pagination, setPagination] = useState({ page: 1, pages: 1, total: 0 });
@@ -32,6 +34,54 @@ export default function HistoryPage() {
   const [error, setError] = useState<string | null>(null);
   const [sortField, setSortField] = useState<SortField>("date");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const [exporting, setExporting] = useState(false);
+
+  async function handleExportCsv() {
+    if (!address) return;
+    setExporting(true);
+    try {
+      const data = await getPaymentHistory(
+        address,
+        1,
+        pagination.total || 10000,
+        sortDir
+      );
+
+      const header = "Date,Meter ID,Amount (XLM),Plan,Transaction Hash";
+      const rows = data.payments.map((r) =>
+        [
+          new Date(r.date).toISOString(),
+          r.meterId,
+          r.amountXlm.toFixed(7),
+          r.plan,
+          r.txHash || "",
+        ].join(",")
+      );
+      const csv = [header, ...rows].join("\n");
+      const blob = new Blob([csv], { type: "text/csv" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `payments-${address.slice(0, 8)}-${Date.now()}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+
+      showToast({
+        variant: "success",
+        title: "Export Successful",
+        description: `Exported ${data.payments.length} records to CSV.`,
+      });
+    } catch (e: any) {
+      setError(e.message ?? "Failed to export history");
+      showToast({
+        variant: "error",
+        title: "Export Failed",
+        description: e.message ?? "Failed to export history",
+      });
+    } finally {
+      setExporting(false);
+    }
+  }
 
   const fetchHistory = useCallback(
     async (page: number) => {
@@ -230,31 +280,40 @@ export default function HistoryPage() {
               </table>
             </div>
 
-            {/* Pagination */}
-            {pagination.pages > 1 && (
-              <div className="mt-6 flex flex-col sm:flex-row items-center justify-between gap-3 text-sm text-gray-400">
-                <span>
-                  {pagination.total} record{pagination.total !== 1 ? "s" : ""} total
-                </span>
-                <div className="flex items-center gap-2">
+            {/* Action Bar (Export CSV & Pagination) */}
+            {sorted.length > 0 && (
+              <div className="mt-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-gray-400 border-t border-white/5 pt-6">
+                <div>
                   <button
-                    disabled={pagination.page <= 1 || loading}
-                    onClick={() => fetchHistory(pagination.page - 1)}
-                    className="rounded-lg border border-white/10 px-4 py-2 hover:border-solar-yellow hover:text-solar-yellow disabled:opacity-30 disabled:cursor-not-allowed transition"
+                    onClick={handleExportCsv}
+                    disabled={exporting}
+                    className="rounded-lg border border-white/10 px-4 py-2 text-sm text-gray-300 hover:border-solar-yellow hover:text-solar-yellow disabled:opacity-30 disabled:cursor-not-allowed transition"
                   >
-                    ← Prev
-                  </button>
-                  <span className="px-2 text-xs">
-                    {pagination.page} / {pagination.pages}
-                  </span>
-                  <button
-                    disabled={pagination.page >= pagination.pages || loading}
-                    onClick={() => fetchHistory(pagination.page + 1)}
-                    className="rounded-lg border border-white/10 px-4 py-2 hover:border-solar-yellow hover:text-solar-yellow disabled:opacity-30 disabled:cursor-not-allowed transition"
-                  >
-                    Next →
+                    {exporting ? "Exporting..." : "Export CSV"}
                   </button>
                 </div>
+
+                {pagination.pages > 1 && (
+                  <div className="flex items-center gap-2">
+                    <button
+                      disabled={pagination.page <= 1 || loading}
+                      onClick={() => fetchHistory(pagination.page - 1)}
+                      className="rounded-lg border border-white/10 px-4 py-2 hover:border-solar-yellow hover:text-solar-yellow disabled:opacity-30 disabled:cursor-not-allowed transition"
+                    >
+                      ← Prev
+                    </button>
+                    <span className="px-2 text-xs">
+                      {pagination.page} / {pagination.pages}
+                    </span>
+                    <button
+                      disabled={pagination.page >= pagination.pages || loading}
+                      onClick={() => fetchHistory(pagination.page + 1)}
+                      className="rounded-lg border border-white/10 px-4 py-2 hover:border-solar-yellow hover:text-solar-yellow disabled:opacity-30 disabled:cursor-not-allowed transition"
+                    >
+                      Next →
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </>
