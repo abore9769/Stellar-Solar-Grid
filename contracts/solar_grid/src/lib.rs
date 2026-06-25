@@ -962,7 +962,13 @@ impl SolarGridContract {
     /// Admin-only. Use migrate_meter_to_v2 for v1 → v2 migrations.
     pub fn migrate_meter(env: Env, meter_id: String) -> Result<(), ContractError> {
         Self::require_admin(&env)?;
-        let key = DataKey::Meter(meter_id);
+        let key = DataKey::Meter(meter_id.clone());
+        // Already at v2 — idempotent no-op.
+        if let Some(meter) = env.storage().persistent().get::<DataKey, Meter>(&key) {
+            if meter.version >= 2 {
+                return Ok(());
+            }
+        }
         let legacy: LegacyMeter = env
             .storage()
             .persistent()
@@ -976,7 +982,13 @@ impl SolarGridContract {
     /// Migrate a meter from v1 (LegacyMeterV1) to v2 (Meter) schema. Admin-only.
     pub fn migrate_meter_to_v2(env: Env, meter_id: String) -> Result<(), ContractError> {
         Self::require_admin(&env)?;
-        let key = DataKey::Meter(meter_id);
+        let key = DataKey::Meter(meter_id.clone());
+        // Already at v2 — idempotent no-op.
+        if let Some(meter) = env.storage().persistent().get::<DataKey, Meter>(&key) {
+            if meter.version >= 2 {
+                return Ok(());
+            }
+        }
         let legacy: LegacyMeterV1 = env
             .storage()
             .persistent()
@@ -1936,15 +1948,35 @@ mod tests {
         // Run the migration.
         client.migrate_meter(&meter_id);
 
-        // The entry should now deserialize as a v1 Meter.
+        // The entry should now deserialize as a v2 Meter.
         let meter = client.get_meter(&meter_id);
-        assert_eq!(meter.version, 1);
+        assert_eq!(meter.version, 2);
         assert_eq!(meter.owner, owner);
         assert!(meter.active);
         assert_eq!(meter.units_used, 42);
         assert_eq!(meter.plan, PaymentPlan::UsageBased);
         assert_eq!(meter.last_payment, 1_000);
         assert_eq!(meter.expires_at, u64::MAX);
+    }
+
+    /// Calling migrate_meter on an already-migrated v2 meter is idempotent.
+    #[test]
+    fn test_migrate_meter_idempotent_on_v2() {
+        let (env, client, _admin) = setup();
+        let user = Address::generate(&env);
+        let meter_id = symbol_short!("MIG_IDP");
+
+        // Register creates a v2 meter.
+        allowlist_and_register(&client, &meter_id, &user);
+        let before = client.get_meter(&meter_id);
+        assert_eq!(before.version, 2);
+
+        // Calling migrate_meter again must succeed and leave the entry unchanged.
+        client.migrate_meter(&meter_id);
+        let after = client.get_meter(&meter_id);
+        assert_eq!(after.version, 2);
+        assert_eq!(after.owner, before.owner);
+        assert_eq!(after.units_used, before.units_used);
     }
 
     /// get_all_shares returns the full map in one call.

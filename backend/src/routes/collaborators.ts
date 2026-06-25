@@ -11,12 +11,12 @@ export interface CollaboratorShare {
 }
 
 /**
- * GET /api/collaborators/:contractId
+ * GET /api/collaborators
  *
  * Returns all collaborators and their shares in a single RPC simulation
  * of get_all_shares — eliminates the previous N+1 per-collaborator calls.
  */
-collaboratorRouter.get("/:contractId", async (req, res) => {
+collaboratorRouter.get("/", async (req, res) => {
   try {
     const raw = await contractQuery("get_all_shares", []);
     const shareMap = StellarSdk.scValToNative(raw) as Record<string, number>;
