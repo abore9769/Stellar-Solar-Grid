@@ -12,7 +12,7 @@ import {
 type SortField = "date" | "amountXlm" | "plan" | "meterId";
 type SortDir = "asc" | "desc";
 
-const NETWORK = process.env.NEXT_PUBLIC_NETWORK_PASSPHRASE?.includes("Test")
+const NETWORK = import.meta.env.VITE_NETWORK_PASSPHRASE?.includes("Test")
   ? "testnet"
   : "mainnet";
 
