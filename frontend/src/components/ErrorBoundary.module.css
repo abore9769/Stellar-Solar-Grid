@@ -1,0 +1,31 @@
+.container {
+  padding: 2.5rem;
+  text-align: center;
+}
+
+.title {
+  margin-bottom: 1rem;
+  font-size: 1.5rem;
+  font-weight: 600;
+  color: var(--text-primary, #ffffff);
+}
+
+.message {
+  margin-bottom: 1.5rem;
+  color: var(--text-secondary, #9ca3af);
+}
+
+.retryButton {
+  padding: 0.5rem 1rem;
+  background-color: var(--solar-yellow, #F5C518);
+  color: var(--solar-dark, #0f1419);
+  border: none;
+  border-radius: 0.375rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: background-color 0.2s;
+}
+
+.retryButton:hover {
+  background-color: var(--solar-yellow-hover, #e6b317);
+}

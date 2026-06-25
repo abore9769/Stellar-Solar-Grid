@@ -1,7 +1,12 @@
-"use client";
-
 import { create } from "zustand";
-import { StellarWalletsKit, WalletNetwork, FREIGHTER_ID } from "@creit.tech/stellar-wallets-kit";
+import {
+  StellarWalletsKit,
+  WalletNetwork,
+  FREIGHTER_ID,
+  FreighterModule,
+  XBULL_ID as xBullWalletId,
+  xBullModule,
+} from "@creit.tech/stellar-wallets-kit";
 
 interface WalletState {
   address: string | null;
@@ -16,11 +21,11 @@ interface WalletState {
 function buildKit(): StellarWalletsKit {
   return new StellarWalletsKit({
     network:
-      process.env.NEXT_PUBLIC_NETWORK_PASSPHRASE?.includes("Test")
+      import.meta.env.VITE_NETWORK_PASSPHRASE?.includes("Test")
         ? WalletNetwork.TESTNET
         : WalletNetwork.PUBLIC,
     selectedWalletId: FREIGHTER_ID,
-    modules: [],
+    modules: [new FreighterModule(), new xBullModule()],
   });
 }
 
@@ -37,7 +42,7 @@ export const useWalletStore = create<WalletState>((set, get) => ({
         onWalletSelected: async (option) => {
           kit.setWallet(option.id);
           const { address } = await kit.getAddress();
-          if (!address || address.length < 10) throw new Error("No account found in Freighter");
+          if (!address || address.length < 10) throw new Error("No account found in selected wallet");
           set({ address, kit });
         },
       });
@@ -46,11 +51,10 @@ export const useWalletStore = create<WalletState>((set, get) => ({
         err instanceof Error ? err.message : "Failed to connect wallet";
       const isNotInstalled =
         msg.toLowerCase().includes("not installed") ||
-        msg.toLowerCase().includes("freighter") ||
         msg.toLowerCase().includes("undefined");
       set({
         connectError: isNotInstalled
-          ? "Freighter wallet is not installed."
+          ? "Selected wallet is not installed."
           : msg,
       });
     }
@@ -65,8 +69,20 @@ export const useWalletStore = create<WalletState>((set, get) => ({
     if (!kit || !address) throw new Error("Wallet not connected");
     const { signedTxXdr } = await kit.signTransaction(xdr, {
       address,
-      networkPassphrase: process.env.NEXT_PUBLIC_NETWORK_PASSPHRASE!,
+      networkPassphrase: import.meta.env.VITE_NETWORK_PASSPHRASE!,
     });
     return signedTxXdr;
   },
 }));
+
+export { FREIGHTER_ID, xBullWalletId };
+
+if (typeof window !== "undefined" && (window as any).freighter) {
+  (window as any).freighter.on("accountChanged", (newAddress: string | null) => {
+    if (!newAddress) {
+      useWalletStore.getState().disconnect();
+    } else {
+      useWalletStore.setState({ address: newAddress });
+    }
+  });
+}

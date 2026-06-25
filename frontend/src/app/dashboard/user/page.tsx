@@ -1,14 +1,20 @@
 "use client";
 
-import { useEffect, useState, useCallback, useMemo } from "react";
+import { useEffect, useState, useCallback, useRef } from "react";
 import Link from "next/link";
 import Navbar from "@/components/Navbar";
+import { SkeletonCard } from "@/components/SkeletonCard";
+import { Skeleton } from "@/components/Skeleton";
 import UsageChart, { type UsageDataPoint } from "@/components/UsageChart";
 import { useWalletStore } from "@/store/walletStore";
 import { getMeter, getMetersByOwner, type MeterData } from "@/services/meterService";
 import { parseWalletError } from "@/lib/errors";
+import { useToast } from "@/components/ToastProvider";
 
 const STROOPS_PER_XLM = 10_000_000n;
+
+const API = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:3001";
+const BALANCE_POLL_INTERVAL_MS = 30_000; // 30 seconds
 
 function stroopsToXlm(stroops: bigint): string {
   const whole = stroops / STROOPS_PER_XLM;
@@ -46,11 +52,63 @@ function PlanBadge({ plan }: { plan: string }) {
   );
 }
 
+function ErrorCard({ meterId, error }: { meterId: string; error: string }) {
+  return (
+    <div className="rounded-xl border border-red-500/40 bg-red-900/20 p-4 sm:p-5 space-y-4">
+      {/* Header */}
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <span className="font-mono text-sm text-red-400 font-semibold">{meterId}</span>
+        <span className="inline-flex items-center gap-1.5 rounded-full border border-red-600/40 bg-red-900/30 px-3 py-1 text-xs font-semibold text-red-400">
+          <span className="h-1.5 w-1.5 rounded-full bg-red-400" />
+          Error
+        </span>
+      </div>
+
+      {/* Error message */}
+      <div className="rounded-lg border border-red-600/40 bg-red-900/20 p-3 text-red-300 text-sm">
+        <p>Failed to load meter data: {error}</p>
+      </div>
+
+      {/* Actions */}
+      <div className="flex gap-2 pt-1">
+        <button
+          onClick={() => window.location.reload()} // Simple retry, or could call fetchAll for specific meter
+          className="rounded-lg bg-red-600 px-4 py-2 text-xs font-semibold text-white hover:bg-red-700 transition"
+        >
+          Retry
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function MeterCard({ meterId, meter }: { meterId: string; meter: MeterData }) {
   const now = Date.now() / 1000; // Current time in seconds
   const expiresAt = Number(meter.expires_at);
   const isExpired = expiresAt !== Number.MAX_SAFE_INTEGER && expiresAt > 0 && now >= expiresAt;
   const hasAccess = meter.active && meter.balance > 0n && !isExpired;
+
+  const [history, setHistory] = useState<UsageDataPoint[]>([]);
+  const [loadingHistory, setLoadingHistory] = useState(true);
+
+  useEffect(() => {
+    setLoadingHistory(true);
+    fetch('/api/meters/' + meterId + '/history?limit=7')
+      .then(r => r.json())
+      .then(d => {
+        const events: UsageDataPoint[] = (d.events || []).map((e: { recorded_at: string; units: number; cost?: number }) => ({
+          date: new Date(e.recorded_at).toLocaleDateString(),
+          units: e.units,
+          cost: e.cost,
+        }));
+        setHistory(events);
+        setLoadingHistory(false);
+      })
+      .catch(() => {
+        setHistory([]);
+        setLoadingHistory(false);
+      });
+  }, [meterId]);
 
   // Format expiry date
   const formatExpiry = () => {
@@ -64,7 +122,7 @@ function MeterCard({ meterId, meter }: { meterId: string; meter: MeterData }) {
   };
 
   return (
-    <div className="rounded-xl border border-white/10 bg-solar-accent p-5 space-y-4">
+    <div className="rounded-xl border border-white/10 bg-solar-accent p-4 sm:p-5 space-y-4">
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-2">
         <span className="font-mono text-sm text-solar-yellow font-semibold">{meterId}</span>
@@ -75,7 +133,7 @@ function MeterCard({ meterId, meter }: { meterId: string; meter: MeterData }) {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      <div className="grid grid-cols-1 min-[480px]:grid-cols-2 sm:grid-cols-4 gap-3">
         {[
           { label: "Balance", value: `${stroopsToXlm(meter.balance)} XLM` },
           { label: "Units Used", value: `${Number(meter.units_used) / 1000} kWh` },
@@ -103,6 +161,11 @@ function MeterCard({ meterId, meter }: { meterId: string; meter: MeterData }) {
         </div>
       )}
 
+      {/* Usage History Chart */}
+      <div className="pt-4 border-t border-white/10">
+        <UsageChart data={history} loading={loadingHistory} meterId={meterId} />
+      </div>
+
       {/* Actions */}
       <div className="flex gap-2 pt-1">
         <Link
@@ -122,37 +185,16 @@ function MeterCard({ meterId, meter }: { meterId: string; meter: MeterData }) {
   );
 }
 
-/** Build a 7-day usage history from a meter's total units_used, spreading
- *  consumption over the past week with a small sinusoidal variation so the
- *  chart always has an interesting shape rather than a flat line. */
-function buildUsageHistory(meters: Record<string, MeterData>): UsageDataPoint[] {
-  const totalUnits = Object.values(meters).reduce(
-    (sum, m) => sum + Number(m.units_used),
-    0
-  );
-  return Array.from({ length: 7 }, (_, i) => {
-    const d = new Date();
-    d.setDate(d.getDate() - (6 - i));
-    const label = d.toLocaleDateString(undefined, { month: "short", day: "numeric" });
-    // Spread total units across 7 days with a sine wave for a realistic curve
-    const share = totalUnits > 0
-      ? +((totalUnits / 7) * (0.7 + 0.3 * Math.sin(i * 1.1))).toFixed(2)
-      : 0;
-    return { date: label, units: share };
-  });
-}
-
 export default function UserDashboardPage() {
   const { address, connect } = useWalletStore();
   const { showToast } = useToast();
 
   const [meterIds, setMeterIds] = useState<string[]>([]);
   const [meters, setMeters] = useState<Record<string, MeterData>>({});
+  const [failedMeters, setFailedMeters] = useState<Record<string, string>>({});
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
-
-  const chartData = useMemo(() => buildUsageHistory(meters), [meters]);
 
   const fetchAll = useCallback(async () => {
     if (!address) return;
@@ -161,8 +203,27 @@ export default function UserDashboardPage() {
     try {
       const ids = await getMetersByOwner(address);
       setMeterIds(ids);
-      const entries = await Promise.all(ids.map((id) => getMeter(id).then((m) => [id, m] as const)));
-      setMeters(Object.fromEntries(entries));
+      const metersMap: Record<string, MeterData> = {};
+      const failedMap: Record<string, string> = {};
+      for (const id of ids) {
+        try {
+          const meter = await getMeter(id);
+          metersMap[id] = meter;
+        } catch (err: unknown) {
+          const friendly = parseWalletError(err);
+          failedMap[id] = friendly;
+          showToast({
+            variant: "error",
+            title: `Failed to load meter ${id}`,
+            description: friendly,
+          });
+        }
+      }
+      setMeters(metersMap);
+      setFailedMeters(failedMap);
+      if (Object.keys(failedMap).length > 0) {
+        setError(`Some meters failed to load. Check individual meter cards for details.`);
+      }
       setLastRefresh(new Date());
     } catch (err: unknown) {
       const friendly = parseWalletError(err);
@@ -181,12 +242,54 @@ export default function UserDashboardPage() {
     if (!address) {
       setMeterIds([]);
       setMeters({});
+      setFailedMeters({});
       setError(null);
       setLastRefresh(null);
       return;
     }
     fetchAll();
   }, [address, fetchAll]);
+
+  // Poll individual meter balances every 30s for live updates
+  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  useEffect(() => {
+    if (!address || meterIds.length === 0) {
+      if (pollRef.current) clearInterval(pollRef.current);
+      return;
+    }
+
+    async function pollBalances() {
+      for (const id of meterIds) {
+        try {
+          const res = await fetch(`${API}/api/meters/${id}/balance`);
+          if (!res.ok) continue;
+          const data = await res.json();
+          setMeters((prev) => {
+            const existing = prev[id];
+            if (!existing) return prev;
+            return {
+              ...prev,
+              [id]: {
+                ...existing,
+                balance: BigInt(data.balance ?? existing.balance),
+                units_used: data.units_used ?? existing.units_used,
+                active: data.active ?? existing.active,
+              },
+            };
+          });
+        } catch {
+          // Silently skip — full refresh will recover
+        }
+      }
+      setLastRefresh(new Date());
+    }
+
+    pollRef.current = setInterval(pollBalances, BALANCE_POLL_INTERVAL_MS);
+    return () => {
+      if (pollRef.current) clearInterval(pollRef.current);
+    };
+  }, [address, meterIds]);
 
   return (
     <>
@@ -244,7 +347,21 @@ export default function UserDashboardPage() {
         {address && loading && meterIds.length === 0 && (
           <div className="space-y-4">
             {[0, 1].map((i) => (
-              <SkeletonCard key={i} height={160} />
+              <div key={i} className="rounded-xl border border-white/10 bg-solar-accent p-4 sm:p-5 space-y-4">
+                <div className="flex items-center justify-between gap-2">
+                  <Skeleton width="30%" height={16} />
+                  <Skeleton width="20%" height={24} />
+                </div>
+                <div className="grid grid-cols-1 min-[480px]:grid-cols-2 sm:grid-cols-4 gap-3">
+                  {[1, 2, 3, 4].map((j) => (
+                    <div key={j} className="flex flex-col gap-1">
+                      <Skeleton width="60%" height={10} />
+                      <Skeleton height={16} />
+                    </div>
+                  ))}
+                </div>
+                <Skeleton height={40} />
+              </div>
             ))}
           </div>
         )}
@@ -262,6 +379,8 @@ export default function UserDashboardPage() {
             {meterIds.map((id) =>
               meters[id] ? (
                 <MeterCard key={id} meterId={id} meter={meters[id]} />
+              ) : failedMeters[id] ? (
+                <ErrorCard key={id} meterId={id} error={failedMeters[id]} />
               ) : (
                 <SkeletonCard key={id} height={160} />
               )
@@ -269,15 +388,7 @@ export default function UserDashboardPage() {
           </div>
         )}
 
-        {/* Usage chart — visible once connected; shows skeleton while loading */}
-        {address && (
-          <div className="mt-6">
-            <UsageChart
-              data={chartData}
-              loading={loading && meterIds.length === 0}
-            />
-          </div>
-        )}
+
       </main>
     </>
   );
