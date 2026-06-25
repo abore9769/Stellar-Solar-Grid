@@ -2,6 +2,12 @@ import { Router } from "express";
 import * as crypto from "crypto";
 import * as StellarSdk from "@stellar/stellar-sdk";
 import { adminInvoke } from "../lib/stellar.js";
+import { asyncHandler } from "../lib/asyncHandler.js";
+import { validateRequest } from "../lib/validation.js";
+import { logger } from "../lib/logger.js";
+import { activeMeters, paymentVolume } from "../lib/metrics.js";
+import { z } from "zod";
+import { SmsPaymentWebhookSchema } from "../lib/validation.js";
 
 export const webhookRouter = Router();
 
@@ -26,40 +32,66 @@ function verifySignature(rawBody: Buffer, signature: string): boolean {
  *
  * Triggers make_payment on-chain using the admin keypair as payer.
  */
-webhookRouter.post("/sms-payment", async (req, res) => {
-  const signature = req.headers["x-webhook-signature"] as string | undefined;
-  if (
-    !signature ||
-    !verifySignature(
-      (req as any).rawBody ?? Buffer.from(JSON.stringify(req.body)),
-      signature
-    )
-  ) {
-    return res.status(401).json({ error: "Invalid webhook signature" });
-  }
+webhookRouter.post(
+  "/sms-payment",
+  validateRequest({ body: SmsPaymentWebhookSchema }),
+  asyncHandler(async (req, res) => {
+    const signature = req.headers["x-webhook-signature"] as string | undefined;
+    if (
+      !signature ||
+      !verifySignature(
+        (req as any).rawBody ?? Buffer.from(JSON.stringify(req.body)),
+        signature,
+      )
+    ) {
+      return res.status(401).json({ error: "Invalid webhook signature" });
+    }
 
-  const { meter_id, amount_xlm } = req.body as {
-    meter_id?: string;
-    amount_xlm?: number;
-  };
+    const { meter_id, amount_xlm } = req.body;
 
-  if (!meter_id || typeof amount_xlm !== "number" || amount_xlm <= 0) {
-    return res
-      .status(400)
-      .json({ error: "meter_id and positive amount_xlm are required" });
-  }
-
-  const stroops = BigInt(Math.round(amount_xlm * 10_000_000));
-
-  try {
+    const stroops = BigInt(Math.round(amount_xlm * 10_000_000));
     const hash = await adminInvoke("make_payment", [
       StellarSdk.nativeToScVal(meter_id, { type: "symbol" }),
-      StellarSdk.nativeToScVal(process.env.ADMIN_PUBLIC_KEY!, { type: "address" }),
+      StellarSdk.nativeToScVal(process.env.ADMIN_PUBLIC_KEY!, {
+        type: "address",
+      }),
       StellarSdk.nativeToScVal(stroops, { type: "i128" }),
       StellarSdk.xdr.ScVal.scvVec([StellarSdk.xdr.ScVal.scvSymbol("Daily")]),
     ]);
+    paymentVolume.inc(amount_xlm);
+    activeMeters.inc();
     return res.status(200).json({ hash });
-  } catch (err: any) {
-    return res.status(500).json({ error: err.message });
-  }
-});
+  }),
+);
+
+/**
+ * POST /api/webhooks/low-balance
+ *
+ * Register webhook URL for low-balance notifications.
+ * Providers can configure their webhook endpoint to receive alerts
+ * when a customer's meter balance drops below the threshold.
+ *
+ * Payload:
+ *   { "webhook_url": "https://example.com/webhook" }
+ */
+webhookRouter.post(
+  "/low-balance",
+  validateRequest({
+    body: z.object({
+      webhook_url: z.string().url("Invalid webhook URL format"),
+    }),
+  }),
+  asyncHandler(async (req, res) => {
+    const { webhook_url } = req.body;
+
+    // For now, store in environment variable (in production, use a database)
+    process.env.PROVIDER_WEBHOOK_URL = webhook_url;
+
+    logger.info("Low-balance webhook registered", { webhook_url });
+
+    return res.status(200).json({
+      message: "Webhook registered successfully",
+      webhook_url,
+    });
+  }),
+);
