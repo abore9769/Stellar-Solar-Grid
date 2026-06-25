@@ -1,0 +1,9 @@
+.chartContainer {
+  min-height: 12rem;
+}
+
+.legendStyle {
+  fontSize: "11px";
+  color: "#9ca3af";
+  paddingTop: "8px";
+}
