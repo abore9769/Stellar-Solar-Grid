@@ -25,6 +25,7 @@ pub enum ContractError {
     CollaboratorAlreadyExists = 13,
     DailyLimitReached = 14,
     MeterNotActive = 15,
+    ContractNotFrozen = 16,
 }
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
@@ -37,6 +38,7 @@ const METER_LIST: Symbol = symbol_short!("MLIST");
 const COLLABS: Symbol = symbol_short!("COLLABS");
 const SHARES: Symbol = symbol_short!("SHARES");
 const PENDING_ADMIN: Symbol = symbol_short!("PADMIN");
+const FROZEN: Symbol = symbol_short!("FROZEN");
 const SECONDS_PER_DAY: u64 = 86_400;
 const SECONDS_PER_WEEK: u64 = 604_800;
 
@@ -751,6 +753,16 @@ impl SolarGridContract {
             .unwrap_or(Vec::new(&env))
     }
 
+    /// Returns the share (in basis points) allocated to a single collaborator.
+    /// Returns `None` if the address is not a registered collaborator.
+    /// Share value is in basis points: 1000 = 10%, 10000 = 100%.
+    pub fn get_collaborator_share(env: Env, address: Address) -> Option<u32> {
+        let shares: Map<Address, u32> = env.storage().instance()
+            .get(&SHARES)
+            .unwrap_or_else(|| Map::new(&env));
+        shares.get(address)
+    }
+
     /// Returns the full share map in a single call — eliminates N+1 RPC calls.
     /// Map<Address, u32> where u32 is basis points (100 = 1%).
     pub fn get_all_shares(env: Env) -> Map<Address, u32> {
@@ -808,6 +820,60 @@ impl SolarGridContract {
         }
         env.events().publish((EVT_NS, symbol_short!("distrib")), (amount,));
         Ok(payouts)
+    }
+
+    // ── Emergency / admin controls ───────────────────────────────────────────
+
+    /// Mark the contract as frozen. Admin-only. Required before calling
+    /// `emergency_withdraw`. Intended for compromise or deprecation scenarios.
+    pub fn freeze_contract(env: Env) -> Result<(), ContractError> {
+        Self::require_admin(&env)?;
+        env.storage().instance().set(&FROZEN, &true);
+        Ok(())
+    }
+
+    /// Drain all contract-held token balance to a recovery address. Admin-only.
+    /// The contract must be frozen first via `freeze_contract`; returns
+    /// `ContractNotFrozen` otherwise. Returns `Ok(())` when balance is zero.
+    pub fn emergency_withdraw(env: Env, to: Address) -> Result<(), ContractError> {
+        Self::require_admin(&env)?;
+        let frozen: bool = env.storage().instance().get(&FROZEN).unwrap_or(false);
+        if !frozen {
+            return Err(ContractError::ContractNotFrozen);
+        }
+        let token_addr: Address = env.storage().instance()
+            .get(&TOKEN)
+            .ok_or(ContractError::NotInitialized)?;
+        let token = token::Client::new(&env, &token_addr);
+        let balance = token.balance(&env.current_contract_address());
+        if balance > 0 {
+            token.transfer(&env.current_contract_address(), &to, &balance);
+        }
+        env.events().publish(
+            (symbol_short!("WITHDRAW"), symbol_short!("emergency")),
+            (to.clone(), balance),
+        );
+        Ok(())
+    }
+
+    /// Manually expire a meter before its natural expiry. Admin-only.
+    /// Sets `expires_at` to the current ledger timestamp and `active` to false.
+    /// Useful for policy violations or testing expiry flows.
+    /// Returns `MeterNotFound` for unknown meter IDs.
+    pub fn expire_meter(env: Env, meter_id: String) -> Result<(), ContractError> {
+        Self::require_admin(&env)?;
+        let key = DataKey::Meter(meter_id.clone());
+        let mut meter: Meter = env.storage().persistent()
+            .get(&key)
+            .ok_or(ContractError::MeterNotFound)?;
+        meter.expires_at = env.ledger().timestamp();
+        meter.active = false;
+        env.storage().persistent().set(&key, &meter);
+        env.events().publish(
+            (symbol_short!("METER"), symbol_short!("expired")),
+            meter_id,
+        );
+        Ok(())
     }
 
     // ── Internal helpers ──────────────────────────────────────────────────────
@@ -2230,24 +2296,103 @@ mod tests {
         let (env, client, _admin, _token_address) = setup_with_token();
         let user = Address::generate(&env);
         let meter_id = symbol_short!("METER1");
-        
+
         client.allowlist_add(&user);
         client.register_meter(&meter_id, &user);
-        
+
         // Try to activate without balance
         let result = client.try_set_active(&meter_id, &true);
         assert_eq!(result, Err(Ok(ContractError::CannotActivateWithoutBalance)));
-        
+
         // Verify it works after payment
         let token_admin_client = token::StellarAssetClient::new(&env, &_token_address);
         token_admin_client.mint(&user, &1_000_i128);
         client.make_payment(&meter_id, &user, &1_000_i128, &PaymentPlan::Daily);
-        
+
         // Deactivate then reactivate
         client.set_active(&meter_id, &false);
         assert_eq!(client.check_access(&meter_id), false);
         client.set_active(&meter_id, &true);
         assert_eq!(client.check_access(&meter_id), true);
+    }
+
+    // ── Issue #414: get_collaborator_share ────────────────────────────────────
+
+    #[test]
+    fn test_get_collaborator_share_returns_correct_value() {
+        let (env, client, _admin) = setup();
+        let alice = Address::generate(&env);
+        client.add_collaborator(&alice, &3_000_u32);
+        assert_eq!(client.get_collaborator_share(&alice), Some(3_000_u32));
+    }
+
+    #[test]
+    fn test_get_collaborator_share_returns_none_for_unknown_address() {
+        let (env, client, _admin) = setup();
+        let unknown = Address::generate(&env);
+        assert_eq!(client.get_collaborator_share(&unknown), None);
+    }
+
+    // ── Issue #415: freeze_contract / emergency_withdraw ──────────────────────
+
+    #[test]
+    fn test_emergency_withdraw_transfers_full_balance() {
+        let (env, client, _admin, token_address) = setup_with_token();
+        let token_admin_client = token::StellarAssetClient::new(&env, &token_address);
+        let token_client = token::Client::new(&env, &token_address);
+
+        token_admin_client.mint(&client.address, &1_000_i128);
+        client.freeze_contract();
+
+        let recipient = Address::generate(&env);
+        client.emergency_withdraw(&recipient);
+
+        assert_eq!(token_client.balance(&recipient), 1_000);
+        assert_eq!(token_client.balance(&client.address), 0);
+    }
+
+    #[test]
+    fn test_emergency_withdraw_noop_when_balance_zero() {
+        let (env, client, _admin, _token_address) = setup_with_token();
+        client.freeze_contract();
+        let recipient = Address::generate(&env);
+        client.emergency_withdraw(&recipient);
+    }
+
+    #[test]
+    fn test_emergency_withdraw_requires_frozen() {
+        let (env, client, _admin, _token_address) = setup_with_token();
+        let recipient = Address::generate(&env);
+        let result = client.try_emergency_withdraw(&recipient);
+        assert_eq!(result, Err(Ok(ContractError::ContractNotFrozen)));
+    }
+
+    // ── Issue #417: expire_meter ──────────────────────────────────────────────
+
+    #[test]
+    fn test_expire_meter_sets_inactive_and_expired() {
+        let (env, client, _admin, token_address) = setup_with_token();
+        let token_admin_client = token::StellarAssetClient::new(&env, &token_address);
+        let user = Address::generate(&env);
+        let meter_id = symbol_short!("EXP_MTR");
+
+        allowlist_and_register(&client, &meter_id, &user);
+        token_admin_client.mint(&user, &1_000_i128);
+        client.make_payment(&meter_id, &user, &1_000_i128, &PaymentPlan::Weekly);
+        assert!(client.get_meter(&meter_id).active);
+
+        client.expire_meter(&meter_id);
+
+        let meter = client.get_meter(&meter_id);
+        assert!(!meter.active);
+        assert!(meter.expires_at <= env.ledger().timestamp());
+    }
+
+    #[test]
+    fn test_expire_meter_returns_not_found_for_unknown() {
+        let (_env, client, _admin) = setup();
+        let result = client.try_expire_meter(&symbol_short!("NO_METER"));
+        assert_eq!(result, Err(Ok(ContractError::MeterNotFound)));
     }
 }
 
