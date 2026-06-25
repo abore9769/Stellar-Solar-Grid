@@ -7,7 +7,7 @@ import { useToast } from "@/components/ToastProvider";
 import { getAllMeters, type MeterData } from "@/services/meterService";
 import { parseWalletError } from "@/lib/errors";
 
-const API = import.meta.env.VITE_BACKEND_URL ?? "http://localhost:3001";
+const API = process.env.NEXT_PUBLIC_BACKEND_URL ?? "http://localhost:3001";
 
 /** Stellar public keys: G + 55 base32 chars (56 total) */
 function isValidStellarAddress(addr: string): boolean {
@@ -28,7 +28,7 @@ export default function ProviderDashboardPage() {
 
   const addressInvalid = ownerAddress.trim().length > 0 && !isValidStellarAddress(ownerAddress.trim());
 
-  const EXPLORER_BASE = import.meta.env.VITE_NETWORK_PASSPHRASE?.includes("Test")
+  const EXPLORER_BASE = process.env.NEXT_PUBLIC_NETWORK_PASSPHRASE?.includes("Test")
     ? "https://stellar.expert/explorer/testnet/tx"
     : "https://stellar.expert/explorer/public/tx";
 
