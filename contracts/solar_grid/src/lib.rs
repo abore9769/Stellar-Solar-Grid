@@ -408,6 +408,34 @@ impl SolarGridContract {
         Ok(())
     }
 
+    /// Emergency stop mechanism: freeze the contract to pause all payments and usage updates.
+    /// Only admin may call this. When frozen, make_payment and update_usage will be rejected.
+    ///
+    /// Emits: `contract_frozen { }`
+    pub fn freeze_contract(env: Env) -> Result<(), ContractError> {
+        Self::require_admin(&env)?;
+        env.storage().instance().set(&FROZEN, &true);
+        env.events().publish((EVT_NS, symbol_short!("frz_on")), ());
+        Ok(())
+    }
+
+    /// Unfreeze the contract to resume normal operations.
+    /// Only admin may call this.
+    ///
+    /// Emits: `contract_unfrozen { }`
+    pub fn unfreeze_contract(env: Env) -> Result<(), ContractError> {
+        Self::require_admin(&env)?;
+        env.storage().instance().remove(&FROZEN);
+        env.events().publish((EVT_NS, symbol_short!("frz_off")), ());
+        Ok(())
+    }
+
+    /// Check if the contract is currently frozen.
+    pub fn is_frozen(env: Env) -> Result<bool, ContractError> {
+        Self::require_initialized(&env)?;
+        Ok(env.storage().instance().get::<Symbol, bool>(&FROZEN).unwrap_or(false))
+    }
+
     /// Make a payment to top up a meter's balance and activate it.
     /// `amount` is in the token's smallest unit. `plan` sets the billing cycle.
     ///
@@ -421,6 +449,9 @@ impl SolarGridContract {
         amount: i128,
         plan: PaymentPlan,
     ) -> Result<(), ContractError> {
+        if env.storage().instance().get::<Symbol, bool>(&FROZEN).unwrap_or(false) {
+            return Err(ContractError::ContractFrozen);
+        }
         payer.require_auth();
         if amount <= 0 {
             return Err(ContractError::InvalidAmount);
@@ -580,6 +611,9 @@ impl SolarGridContract {
         units: u64,
         cost: i128,
     ) -> Result<(), ContractError> {
+        if env.storage().instance().get::<Symbol, bool>(&FROZEN).unwrap_or(false) {
+            return Err(ContractError::ContractFrozen);
+        }
         Self::require_admin(&env)?;
         let oracle: Option<Address> = env.storage().instance().get(&ORACLE);
         if oracle.is_none() {
