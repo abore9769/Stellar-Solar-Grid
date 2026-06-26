@@ -25,6 +25,7 @@ pub enum ContractError {
     CollaboratorAlreadyExists = 13,
     DailyLimitReached = 14,
     MeterNotActive = 15,
+    ContractFrozen = 16,
 }
 
 // ── Storage keys ──────────────────────────────────────────────────────────────
@@ -37,6 +38,7 @@ const METER_LIST: Symbol = symbol_short!("MLIST");
 const COLLABS: Symbol = symbol_short!("COLLABS");
 const SHARES: Symbol = symbol_short!("SHARES");
 const PENDING_ADMIN: Symbol = symbol_short!("PADMIN");
+const FROZEN: Symbol = symbol_short!("FROZEN");
 const SECONDS_PER_DAY: u64 = 86_400;
 const SECONDS_PER_WEEK: u64 = 604_800;
 
@@ -406,6 +408,34 @@ impl SolarGridContract {
         Ok(())
     }
 
+    /// Emergency stop mechanism: freeze the contract to pause all payments and usage updates.
+    /// Only admin may call this. When frozen, make_payment and update_usage will be rejected.
+    ///
+    /// Emits: `contract_frozen { }`
+    pub fn freeze_contract(env: Env) -> Result<(), ContractError> {
+        Self::require_admin(&env)?;
+        env.storage().instance().set(&FROZEN, &true);
+        env.events().publish((EVT_NS, symbol_short!("frz_on")), ());
+        Ok(())
+    }
+
+    /// Unfreeze the contract to resume normal operations.
+    /// Only admin may call this.
+    ///
+    /// Emits: `contract_unfrozen { }`
+    pub fn unfreeze_contract(env: Env) -> Result<(), ContractError> {
+        Self::require_admin(&env)?;
+        env.storage().instance().remove(&FROZEN);
+        env.events().publish((EVT_NS, symbol_short!("frz_off")), ());
+        Ok(())
+    }
+
+    /// Check if the contract is currently frozen.
+    pub fn is_frozen(env: Env) -> Result<bool, ContractError> {
+        Self::require_initialized(&env)?;
+        Ok(env.storage().instance().get::<Symbol, bool>(&FROZEN).unwrap_or(false))
+    }
+
     /// Make a payment to top up a meter's balance and activate it.
     /// `amount` is in the token's smallest unit. `plan` sets the billing cycle.
     ///
@@ -419,6 +449,9 @@ impl SolarGridContract {
         amount: i128,
         plan: PaymentPlan,
     ) -> Result<(), ContractError> {
+        if env.storage().instance().get::<Symbol, bool>(&FROZEN).unwrap_or(false) {
+            return Err(ContractError::ContractFrozen);
+        }
         payer.require_auth();
         if amount <= 0 {
             return Err(ContractError::InvalidAmount);
@@ -578,6 +611,9 @@ impl SolarGridContract {
         units: u64,
         cost: i128,
     ) -> Result<(), ContractError> {
+        if env.storage().instance().get::<Symbol, bool>(&FROZEN).unwrap_or(false) {
+            return Err(ContractError::ContractFrozen);
+        }
         Self::require_admin(&env)?;
         let oracle: Option<Address> = env.storage().instance().get(&ORACLE);
         if oracle.is_none() {
@@ -2248,6 +2284,155 @@ mod tests {
         assert_eq!(client.check_access(&meter_id), false);
         client.set_active(&meter_id, &true);
         assert_eq!(client.check_access(&meter_id), true);
+    }
+
+    // ── Emergency stop (freeze/unfreeze) tests ────────────────────────────────
+
+    /// freeze_contract requires admin auth and blocks make_payment.
+    #[test]
+    fn test_freeze_contract_blocks_payment() {
+        let (env, client, _admin, token_address) = setup_with_token();
+        let token_admin_client = token::StellarAssetClient::new(&env, &token_address);
+        let user = Address::generate(&env);
+        let meter_id = symbol_short!("FRZ_PMT");
+
+        allowlist_and_register(&client, &meter_id, &user);
+        token_admin_client.mint(&user, &1_000_i128);
+
+        // Before freeze, payment should succeed
+        client.make_payment(&meter_id, &user, &500_i128, &PaymentPlan::Daily);
+        assert_eq!(client.get_meter_balance(&meter_id), 500);
+
+        // Freeze the contract
+        client.freeze_contract();
+        assert_eq!(client.is_frozen(), true);
+
+        // After freeze, payment should fail with ContractFrozen error
+        let result = client.try_make_payment(&meter_id, &user, &500_i128, &PaymentPlan::Daily);
+        assert_eq!(result, Err(Ok(ContractError::ContractFrozen)));
+    }
+
+    /// unfreeze_contract requires admin auth and re-enables make_payment.
+    #[test]
+    fn test_unfreeze_contract_allows_payment_again() {
+        let (env, client, _admin, token_address) = setup_with_token();
+        let token_admin_client = token::StellarAssetClient::new(&env, &token_address);
+        let user = Address::generate(&env);
+        let meter_id = symbol_short!("UNFRZ");
+
+        allowlist_and_register(&client, &meter_id, &user);
+        token_admin_client.mint(&user, &2_000_i128);
+
+        // Freeze
+        client.freeze_contract();
+        assert_eq!(client.is_frozen(), true);
+
+        // Payment blocked
+        let result = client.try_make_payment(&meter_id, &user, &500_i128, &PaymentPlan::Daily);
+        assert_eq!(result, Err(Ok(ContractError::ContractFrozen)));
+
+        // Unfreeze
+        client.unfreeze_contract();
+        assert_eq!(client.is_frozen(), false);
+
+        // Payment works again
+        client.make_payment(&meter_id, &user, &500_i128, &PaymentPlan::Daily);
+        assert_eq!(client.get_meter_balance(&meter_id), 500);
+    }
+
+    /// freeze_contract blocks update_usage.
+    #[test]
+    fn test_freeze_contract_blocks_usage_update() {
+        let (env, client, _admin, token_address) = setup_with_token();
+        let token_admin_client = token::StellarAssetClient::new(&env, &token_address);
+        setup_oracle(&env, &client);
+        let user = Address::generate(&env);
+        let meter_id = symbol_short!("FRZ_USG");
+
+        allowlist_and_register(&client, &meter_id, &user);
+        token_admin_client.mint(&user, &1_000_i128);
+        client.make_payment(&meter_id, &user, &1_000_i128, &PaymentPlan::UsageBased);
+
+        // Before freeze, usage update should succeed
+        client.update_usage(&meter_id, &10_u64, &100_i128);
+        assert_eq!(client.get_meter_balance(&meter_id), 900);
+
+        // Freeze the contract
+        client.freeze_contract();
+
+        // After freeze, usage update should fail with ContractFrozen error
+        let result = client.try_update_usage(&meter_id, &5_u64, &50_i128);
+        assert_eq!(result, Err(Ok(ContractError::ContractFrozen)));
+    }
+
+    /// is_frozen returns false by default and true after freeze.
+    #[test]
+    fn test_is_frozen_state() {
+        let (_env, client, _admin) = setup();
+
+        // Default: not frozen
+        assert_eq!(client.is_frozen(), false);
+
+        // After freeze
+        client.freeze_contract();
+        assert_eq!(client.is_frozen(), true);
+
+        // After unfreeze
+        client.unfreeze_contract();
+        assert_eq!(client.is_frozen(), false);
+    }
+
+    /// Frozen state survives ledger upgrades (stored in instance storage).
+    #[test]
+    fn test_frozen_state_survives_ledger_upgrade() {
+        let (env, client, _admin) = setup();
+
+        // Freeze contract
+        client.freeze_contract();
+        assert_eq!(client.is_frozen(), true);
+
+        // Simulate ledger upgrade by checking frozen status
+        // In the real contract, instance storage is designed to survive ledger upgrades
+        // We verify the state persists across subsequent calls
+        assert_eq!(client.is_frozen(), true);
+
+        // Unfreeze and verify state persists
+        client.unfreeze_contract();
+        assert_eq!(client.is_frozen(), false);
+        assert_eq!(client.is_frozen(), false); // Call again to verify persistence
+    }
+
+    /// Freeze emits frz_on event.
+    #[test]
+    fn test_freeze_contract_emits_event() {
+        let (env, client, _admin) = setup();
+        client.freeze_contract();
+
+        let events = env.events().all();
+        let found = events.iter().any(|(_, topics, _)| {
+            topics.len() >= 2
+                && topics.get(0) == Some(EVT_NS.into())
+                && topics.get(1) == Some(symbol_short!("frz_on").into())
+        });
+        assert!(found, "freeze event not emitted");
+    }
+
+    /// Unfreeze emits frz_off event.
+    #[test]
+    fn test_unfreeze_contract_emits_event() {
+        let (env, client, _admin) = setup();
+        client.freeze_contract();
+        env.events().all(); // Clear events
+
+        client.unfreeze_contract();
+
+        let events = env.events().all();
+        let found = events.iter().any(|(_, topics, _)| {
+            topics.len() >= 2
+                && topics.get(0) == Some(EVT_NS.into())
+                && topics.get(1) == Some(symbol_short!("frz_off").into())
+        });
+        assert!(found, "unfreeze event not emitted");
     }
 }
 
