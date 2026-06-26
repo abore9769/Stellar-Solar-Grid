@@ -78,23 +78,17 @@ export class ContractClient {
 }
 
 export const client = new ContractClient(
-  import.meta.env.VITE_CONTRACT_ID,
-  import.meta.env.VITE_RPC_URL ?? 'https://soroban-testnet.stellar.org',
-  import.meta.env.VITE_NETWORK_PASSPHRASE ?? StellarSdk.Networks.TESTNET,
+  process.env.NEXT_PUBLIC_CONTRACT_ID!,
+  process.env.NEXT_PUBLIC_RPC_URL ?? 'https://soroban-testnet.stellar.org',
+  process.env.NEXT_PUBLIC_NETWORK_PASSPHRASE ?? StellarSdk.Networks.TESTNET,
 );
 
 export async function fetchMeter(meterId: string): Promise<MeterData> {
-  const meterRetval = await client.query("get_meter", [
+  const retval = await client.query("get_meter_full", [
     StellarSdk.nativeToScVal(meterId, { type: "symbol" }),
   ]);
-  const meterData = StellarSdk.scValToNative(meterRetval);
-
-  const balanceRetval = await client.query("get_meter_balance", [
-    StellarSdk.nativeToScVal(meterId, { type: "symbol" }),
-  ]);
-  const balance = StellarSdk.scValToNative(balanceRetval);
-
-  return { ...meterData, balance: BigInt(balance) } as MeterData;
+  const view = StellarSdk.scValToNative(retval) as { meter: Omit<MeterData, "balance">; balance: bigint };
+  return { ...view.meter, balance: view.balance } as MeterData;
 }
 
 export async function contractInvoke(

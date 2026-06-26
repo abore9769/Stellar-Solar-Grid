@@ -2,6 +2,7 @@ import * as StellarSdk from "@stellar/stellar-sdk";
 import { contractCalls } from "./metrics.js";
 
 const NETWORK = process.env.STELLAR_NETWORK ?? "testnet";
+
 export const NETWORK_PASSPHRASE =
   NETWORK === "mainnet" ? StellarSdk.Networks.PUBLIC : StellarSdk.Networks.TESTNET;
 
@@ -30,10 +31,10 @@ export const scrub = (msg: string | undefined): string => {
 };
 
 export class StellarService {
-  server: StellarSdk.SorobanRpc.Server;
-  adminKeypair: StellarSdk.Keypair;
-  contractId: string;
-  networkPassphrase: string;
+  public readonly server: StellarSdk.SorobanRpc.Server;
+  public readonly adminKeypair: StellarSdk.Keypair;
+  public readonly contractId: string;
+  public readonly networkPassphrase: string;
 
   constructor(config: { rpcUrl: string; adminSecret: string; contractId: string; network: string }) {
     this.server = new StellarSdk.SorobanRpc.Server(config.rpcUrl);

@@ -1,3 +1,24 @@
+﻿import { Request, Response, NextFunction } from 'express';
+import { ZodSchema, ZodError } from 'zod';
+
+/**
+ * Validates req.body against the provided Zod schema.
+ * Returns 400 with validation errors if the body is invalid.
+ */
+export function validateRequest<T>(schema: ZodSchema<T>) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    const result = schema.safeParse(req.body);
+    if (!result.success) {
+      const errors = (result.error as ZodError).errors.map((e) => ({
+        path: e.path.join('.'),
+        message: e.message,
+      }));
+      return res.status(400).json({ error: 'Validation failed', details: errors });
+    }
+    req.body = result.data;
+    next();
+  };
+}
 import type { RequestHandler } from "express";
 import { z, type ZodTypeAny } from "zod";
 
@@ -63,6 +84,7 @@ export const SmsPaymentWebhookSchema = z
       .number()
       .positive("amount_xlm must be positive")
       .finite("amount_xlm must be a finite number"),
+    plan: PaymentPlanSchema.optional().default("Daily"),
   })
   .strict();
 
@@ -106,6 +128,7 @@ export function validateRequest(schemas: RequestSchemaSet): RequestHandler {
     if (Object.keys(details).length > 0) {
       return res.status(400).json({
         error: "Validation failed",
+        code: "VALIDATION_ERROR",
         details,
       });
     }
