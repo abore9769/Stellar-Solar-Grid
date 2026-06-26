@@ -1,9 +1,12 @@
-﻿import "dotenv/config";
+import "dotenv/config";
 import express from "express";
 import cors from "cors";
 import timeout from "connect-timeout";
 import { NextFunction, Request, Response } from "express";
 import mqtt from "mqtt";
+import helmet from "helmet";
+import swaggerUi from "swagger-ui-express";
+import YAML from "yamljs";
 import { stellarService, server } from "./lib/stellar.js";
 import { createMeterRouter } from "./routes/meters.js";
 import { paymentsRouter } from "./routes/payments.js";
@@ -12,24 +15,19 @@ import { allowlistRouter } from "./routes/allowlist.js";
 import { collaboratorRouter } from "./routes/collaborators.js";
 import { statsRouter } from "./routes/stats.js";
 import { startIoTBridge } from "./iot/bridge.js";
-import { requestLogger } from "./middleware/index.js";
 import { logger } from "./lib/logger.js";
-import requestLogger from "./middleware/requestLogger.js";
+import requestLoggerMiddleware from "./middleware/requestLogger.js";
 import { register } from "./lib/metrics.js";
 import {
   initUsageEventStore,
   startUsageEventRetryWorker,
 } from "./lib/usageEvents.js";
 import { metricsRouter } from "./routes/metrics.js";
+import { sanitiseBody } from "./middleware/sanitise.js";
 
 const REQUIRED_ENV = ["CONTRACT_ID", "ADMIN_SECRET_KEY", "STELLAR_RPC_URL", "MQTT_BROKER"];
 const PORT = process.env.PORT ?? 3001;
 
-app.use(express.json());
-app.use(requestLogger);
-app.use((_, res, next) => {
-  res.setHeader("Access-Control-Allow-Origin", "*");
-  res.setHeader("Access-Control-Allow-Headers", "Content-Type");
 const missing = REQUIRED_ENV.filter((k) => !process.env[k]);
 if (missing.length > 0) {
   logger.fatal(
@@ -40,6 +38,17 @@ if (missing.length > 0) {
 }
 
 const app = express();
+
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'none'"],
+      scriptSrc: ["'self'"],
+      connectSrc: ["'self'"],
+    },
+  },
+  hsts: { maxAge: 31536000, includeSubDomains: true },
+}));
 
 app.use(
   cors({
@@ -53,13 +62,15 @@ app.use(
 // Capture raw body for webhook signature verification before JSON parsing
 app.use(
   express.json({
+    limit: '100kb',
     verify: (req: any, _res, buf) => {
       req.rawBody = buf;
     },
   }),
 );
 
-app.use(requestLogger);
+app.use(sanitiseBody);
+app.use(requestLoggerMiddleware);
 
 // Request timeout — configurable via REQUEST_TIMEOUT env var (default 15s)
 const requestTimeout = process.env.REQUEST_TIMEOUT ?? '15s';
@@ -75,13 +86,38 @@ app.use((req, _res, next) => {
   next();
 });
 
-app.use("/api/meters", createMeterRouter(stellarService));
-app.use("/api/payments", paymentsRouter);
-app.use("/api/webhooks", webhookRouter);
-app.use("/api/allowlist", allowlistRouter);
-app.use("/api/collaborators", collaboratorRouter);
-app.use("/api/stats", statsRouter);
-app.use("/api/metrics", metricsRouter);
+const V1 = '/api/v1';
+
+// Swagger documentation
+try {
+  const spec = YAML.load('./openapi.yaml');
+  const docsRouter = express.Router();
+  docsRouter.use(helmet({ contentSecurityPolicy: false }));
+  
+  if (process.env.ENABLE_DOCS !== 'false') {
+    app.use('/api/docs', docsRouter, swaggerUi.serve, swaggerUi.setup(spec, {
+      customSiteTitle: 'Stellar Solar Grid API',
+    }));
+  }
+} catch (error) {
+  logger.warn('Could not load openapi.yaml. Swagger UI will not be available.');
+}
+
+app.use(`${V1}/meters`, createMeterRouter(stellarService));
+app.use(`${V1}/payments`, paymentsRouter);
+app.use(`${V1}/webhooks`, webhookRouter);
+app.use(`${V1}/allowlist`, allowlistRouter);
+app.use(`${V1}/collaborators`, collaboratorRouter);
+app.use(`${V1}/stats`, statsRouter);
+app.use(`${V1}/metrics`, metricsRouter);
+
+// Backwards-compat redirect (remove after 2 release cycles)
+app.use('/api', (req, res, next) => {
+  if (req.path === '/docs' || req.path.startsWith('/docs/')) {
+    return next();
+  }
+  res.redirect(301, `/api/v1${req.path}`);
+});
 
 app.get('/health', async (_req, res) => {
   const checks: Record<string, string> = {};
