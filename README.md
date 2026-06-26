@@ -144,6 +144,12 @@ The `SolarGrid` contract manages:
 
 ## Backend API
 
+The full machine-readable API specification is available at [`backend/openapi.yaml`](backend/openapi.yaml) (OpenAPI 3.1). You can preview it with:
+
+```bash
+npx @redocly/cli preview-docs backend/openapi.yaml
+```
+
 ### Meter Balance
 
 **`GET /api/meters/:id/balance`**
