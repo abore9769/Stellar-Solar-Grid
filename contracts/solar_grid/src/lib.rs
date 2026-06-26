@@ -905,12 +905,15 @@ impl SolarGridContract {
     }
 
     /// Batch update usage for multiple meters in a single transaction.
+    /// Batch update usage for multiple meters.
+    /// Returns a Vec of failed meter IDs (empty Vec means all succeeded).
+    /// Failed IDs can be due to meter not found or other validation errors.
     /// Skips invalid meter IDs and emits a batch_skip event for each.
     /// Maximum batch size is 50 meters.
     pub fn batch_update_usage(
         env: Env,
         updates: Vec<(String, u64, i128)>,
-    ) -> Result<(), ContractError> {
+    ) -> Result<Vec<String>, ContractError> {
         Self::require_admin(&env)?;
         let oracle: Option<Address> = env.storage().instance().get(&ORACLE);
         if oracle.is_none() {
@@ -920,9 +923,12 @@ impl SolarGridContract {
             return Err(ContractError::BatchTooLarge);
         }
         let now = env.ledger().timestamp();
+        let mut failed: Vec<String> = vec![&env];
+
         for (meter_id, units, cost) in updates.iter() {
             let key = DataKey::Meter(meter_id.clone());
             if !env.storage().persistent().has(&key) {
+                failed.push_back(meter_id.clone());
                 env.events().publish(
                     (EVT_NS, symbol_short!("btch_skip"), meter_id.clone()),
                     (),
@@ -946,6 +952,7 @@ impl SolarGridContract {
                     }
                 }
                 Err(_) => {
+                    failed.push_back(meter_id.clone());
                     env.events().publish(
                         (EVT_NS, symbol_short!("btch_skip"), meter_id.clone()),
                         (),
@@ -953,7 +960,7 @@ impl SolarGridContract {
                 }
             }
         }
-        Ok(())
+        Ok(failed)
     }
 
     fn apply_usage(
@@ -1842,7 +1849,8 @@ mod tests {
         let m1 = symbol_short!("B1_M1");
         register_and_fund(&env, &client, &token_address, &m1, 10_000_i128);
 
-        client.batch_update_usage(&vec![&env, (m1.clone(), 10_u64, 3_000_i128)]);
+        let failed = client.batch_update_usage(&vec![&env, (m1.clone(), 10_u64, 3_000_i128)]);
+        assert_eq!(failed.len(), 0, "Expected no failed meters");
 
         assert_eq!(client.get_meter_balance(&m1), 7_000);
         assert_eq!(client.get_meter(&m1).units_used, 10);
@@ -1868,7 +1876,8 @@ mod tests {
         for id in ids.iter() {
             updates.push_back((id.clone(), 5_u64, 1_000_i128));
         }
-        client.batch_update_usage(&updates);
+        let failed = client.batch_update_usage(&updates);
+        assert_eq!(failed.len(), 0, "Expected no failed meters");
 
         for id in ids.iter() {
             assert_eq!(client.get_meter_balance(id), 9_000);
@@ -1897,7 +1906,8 @@ mod tests {
         for id in ids.iter() {
             updates.push_back((id.clone(), 2_u64, 500_i128));
         }
-        client.batch_update_usage(&updates);
+        let failed = client.batch_update_usage(&updates);
+        assert_eq!(failed.len(), 0, "Expected no failed meters");
 
         for id in ids.iter() {
             assert_eq!(client.get_meter_balance(id), 4_500);
@@ -1919,7 +1929,7 @@ mod tests {
             (m1.clone(), 1_u64, 1_000_i128),
             (m2.clone(), 1_u64, 500_i128),
         ]);
-
+        
         assert_eq!(client.get_meter_balance(&m1), 0);
         assert!(!client.get_meter(&m1).active);
         assert_eq!(client.get_meter_balance(&m2), 4_500);
@@ -1934,12 +1944,17 @@ mod tests {
         let invalid = symbol_short!("BS_BAD");
         register_and_fund(&env, &client, &token_address, &valid, 5_000_i128);
 
-        client.batch_update_usage(&vec![
+        let failed = client.batch_update_usage(&vec![
             &env,
             (invalid.clone(), 1_u64, 100_i128),
             (valid.clone(), 2_u64, 200_i128),
         ]);
 
+        // Verify the invalid meter is in the failure list
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed.get(0).unwrap(), invalid);
+        
+        // Verify the valid meter was processed successfully
         assert_eq!(client.get_meter_balance(&valid), 4_800);
         assert_eq!(client.get_meter(&valid).units_used, 2);
 
@@ -1979,6 +1994,83 @@ mod tests {
         }
         let result = client.try_batch_update_usage(&updates);
         assert_eq!(result, Err(Ok(ContractError::BatchTooLarge)));
+    }
+
+    /// Test batch_update_usage returns failed meter IDs for mixed valid/invalid updates.
+    /// This test verifies the fix for the bug where invalid meters were silently ignored.
+    #[test]
+    fn test_batch_update_usage_returns_failed_meter_ids() {
+        let (env, client, _admin, token_address) = setup_with_token();
+        let token_admin_client = token::StellarAssetClient::new(&env, &token_address);
+        setup_oracle(&env, &client);
+
+        // Register and fund three valid meters
+        let meter_valid1 = String::from_slice(&env, "BF_V1".as_bytes());
+        let meter_valid2 = String::from_slice(&env, "BF_V2".as_bytes());
+        let meter_valid3 = String::from_slice(&env, "BF_V3".as_bytes());
+        let user1 = Address::generate(&env);
+        let user2 = Address::generate(&env);
+        let user3 = Address::generate(&env);
+
+        allowlist_and_register(&client, &meter_valid1, &user1);
+        token_admin_client.mint(&user1, &5_000_i128);
+        client.make_payment(&meter_valid1, &user1, &5_000_i128, &PaymentPlan::UsageBased);
+
+        allowlist_and_register(&client, &meter_valid2, &user2);
+        token_admin_client.mint(&user2, &5_000_i128);
+        client.make_payment(&meter_valid2, &user2, &5_000_i128, &PaymentPlan::UsageBased);
+
+        allowlist_and_register(&client, &meter_valid3, &user3);
+        token_admin_client.mint(&user3, &1_000_i128);
+        client.make_payment(&meter_valid3, &user3, &1_000_i128, &PaymentPlan::UsageBased);
+
+        // Deactivate the third valid meter
+        client.deactivate_meter(&meter_valid3);
+
+        // Create batch with: invalid1, valid1, valid3(deactivated), invalid2, valid2
+        let meter_invalid1 = String::from_slice(&env, "BF_INV1".as_bytes());
+        let meter_invalid2 = String::from_slice(&env, "BF_INV2".as_bytes());
+
+        let updates = vec![
+            (meter_invalid1.clone(), 1_u64, 100_i128),  // missing meter
+            (meter_valid1.clone(), 1_u64, 500_i128),    // valid
+            (meter_valid3.clone(), 1_u64, 100_i128),    // deactivated
+            (meter_invalid2.clone(), 1_u64, 100_i128),  // missing meter
+            (meter_valid2.clone(), 1_u64, 500_i128),    // valid
+        ];
+
+        let failed = client.batch_update_usage(&updates);
+
+        // Verify failed list contains both invalid meters and the deactivated meter
+        assert_eq!(failed.len(), 3, "Expected 3 failed meters (2 missing + 1 deactivated)");
+        
+        // Check that all expected failures are present
+        let mut found_invalid1 = false;
+        let mut found_invalid2 = false;
+        let mut found_valid3 = false;
+        for fail_id in failed.iter() {
+            if fail_id == meter_invalid1 {
+                found_invalid1 = true;
+            } else if fail_id == meter_invalid2 {
+                found_invalid2 = true;
+            } else if fail_id == meter_valid3 {
+                found_valid3 = true;
+            }
+        }
+        assert!(found_invalid1, "meter_invalid1 should be in failed list");
+        assert!(found_invalid2, "meter_invalid2 should be in failed list");
+        assert!(found_valid3, "meter_valid3 (deactivated) should be in failed list");
+
+        // Verify valid meters were processed successfully
+        assert_eq!(client.get_meter_balance(&meter_valid1), 4_500);
+        assert_eq!(client.get_meter(&meter_valid1).units_used, 1);
+
+        assert_eq!(client.get_meter_balance(&meter_valid2), 4_500);
+        assert_eq!(client.get_meter(&meter_valid2).units_used, 1);
+
+        // Verify deactivated meter was not modified
+        assert_eq!(client.get_meter_balance(&meter_valid3), 1_000);
+        assert_eq!(client.get_meter(&meter_valid3).units_used, 0);
     }
 
     // ── Oracle whitelist tests ────────────────────────────────────────────────
@@ -2422,7 +2514,11 @@ mod tests {
             (meter_id1.clone(), 1_u64, 500_i128),
             (meter_id2.clone(), 1_u64, 500_i128),
         ];
-        client.batch_update_usage(&updates);
+        let failed = client.batch_update_usage(&updates);
+
+        // Meter 1 (deactivated) should be in the failure list
+        assert_eq!(failed.len(), 1);
+        assert_eq!(failed.get(0).unwrap(), meter_id1);
 
         // Meter 1 (deactivated) should not have consumed resources
         assert_eq!(client.get_meter(&meter_id1).units_used, 0);
