@@ -21,7 +21,7 @@ interface WalletState {
 function buildKit(): StellarWalletsKit {
   return new StellarWalletsKit({
     network:
-      process.env.NEXT_PUBLIC_NETWORK_PASSPHRASE?.includes("Test")
+      import.meta.env.VITE_NETWORK_PASSPHRASE?.includes("Test")
         ? WalletNetwork.TESTNET
         : WalletNetwork.PUBLIC,
     selectedWalletId: FREIGHTER_ID,
@@ -69,7 +69,7 @@ export const useWalletStore = create<WalletState>((set, get) => ({
     if (!kit || !address) throw new Error("Wallet not connected");
     const { signedTxXdr } = await kit.signTransaction(xdr, {
       address,
-      networkPassphrase: process.env.NEXT_PUBLIC_NETWORK_PASSPHRASE!,
+      networkPassphrase: import.meta.env.VITE_NETWORK_PASSPHRASE ?? 'Test SDF Network ; September 2015',
     });
     return signedTxXdr;
   },
