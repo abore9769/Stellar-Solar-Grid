@@ -334,6 +334,54 @@ impl SolarGridContract {
         Ok(meters)
     }
 
+    /// Get a paginated slice of all registered meters (admin only).
+    /// Returns meter IDs for a given page using offset and limit.
+    /// This is required for mainnet deployments with thousands of meters,
+    /// as get_all_meters would exceed Soroban read entry limits.
+    ///
+    /// # Parameters
+    /// - `offset`: Starting position in the meter list (0-indexed)
+    /// - `limit`: Maximum number of meter IDs to return (capped at 100)
+    ///
+    /// # Returns
+    /// A Vec of meter ID Strings for the requested page.
+    /// Empty Vec when offset exceeds total meter count.
+    pub fn get_all_meters_paginated(
+        env: Env,
+        offset: u32,
+        limit: u32,
+    ) -> Result<Vec<String>, ContractError> {
+        Self::require_admin(&env)?;
+        
+        // Cap limit at 100 to prevent single-call overruns
+        let effective_limit = limit.min(100);
+        
+        let meter_ids: Vec<String> = env
+            .storage()
+            .instance()
+            .get(&METER_LIST)
+            .unwrap_or_else(|| vec![&env]);
+        
+        let total = meter_ids.len() as u32;
+        
+        // Return empty Vec if offset exceeds meter count
+        if offset >= total {
+            return Ok(vec![&env]);
+        }
+        
+        let start = offset as usize;
+        let end = ((offset + effective_limit).min(total)) as usize;
+        
+        let mut page: Vec<String> = vec![&env];
+        for i in start..end {
+            if let Some(meter_id) = meter_ids.get(i as u32) {
+                page.push_back(meter_id);
+            }
+        }
+        
+        Ok(page)
+    }
+
     /// Add an address to the meter-owner allowlist.
     /// Only the admin may call this. Use this to pre-approve user accounts
     /// (G… addresses) before they can be registered as meter owners.
@@ -1591,6 +1639,158 @@ mod tests {
             assert!(!meter.active);
             assert_eq!(meter.units_used, 0);
         }
+    }
+
+    /// get_all_meters_paginated returns first page of meter IDs.
+    #[test]
+    fn test_get_all_meters_paginated_first_page() {
+        let (env, client, _admin) = setup();
+        let user = Address::generate(&env);
+        let ids = [
+            symbol_short!("PAG_1"), symbol_short!("PAG_2"), symbol_short!("PAG_3"),
+            symbol_short!("PAG_4"), symbol_short!("PAG_5"), symbol_short!("PAG_6"),
+            symbol_short!("PAG_7"), symbol_short!("PAG_8"), symbol_short!("PAG_9"),
+            symbol_short!("PAG_A"),
+        ];
+
+        client.allowlist_add(&user);
+        for id in ids.iter() {
+            client.register_meter(id, &user);
+        }
+
+        // Get first 3 meter IDs
+        let page = client.get_all_meters_paginated(&0_u32, &3_u32);
+        assert_eq!(page.len(), 3);
+        for (i, meter_id) in page.iter().enumerate() {
+            assert_eq!(meter_id, &ids[i]);
+        }
+    }
+
+    /// get_all_meters_paginated returns middle page of meter IDs.
+    #[test]
+    fn test_get_all_meters_paginated_middle_page() {
+        let (env, client, _admin) = setup();
+        let user = Address::generate(&env);
+        let ids = [
+            symbol_short!("MID_1"), symbol_short!("MID_2"), symbol_short!("MID_3"),
+            symbol_short!("MID_4"), symbol_short!("MID_5"), symbol_short!("MID_6"),
+            symbol_short!("MID_7"), symbol_short!("MID_8"), symbol_short!("MID_9"),
+            symbol_short!("MID_A"),
+        ];
+
+        client.allowlist_add(&user);
+        for id in ids.iter() {
+            client.register_meter(id, &user);
+        }
+
+        // Get middle page (offset 4, limit 3)
+        let page = client.get_all_meters_paginated(&4_u32, &3_u32);
+        assert_eq!(page.len(), 3);
+        for (i, meter_id) in page.iter().enumerate() {
+            assert_eq!(meter_id, &ids[4 + i]);
+        }
+    }
+
+    /// get_all_meters_paginated returns last page with partial results.
+    #[test]
+    fn test_get_all_meters_paginated_last_page() {
+        let (env, client, _admin) = setup();
+        let user = Address::generate(&env);
+        let ids = [
+            symbol_short!("LST_1"), symbol_short!("LST_2"), symbol_short!("LST_3"),
+            symbol_short!("LST_4"), symbol_short!("LST_5"), symbol_short!("LST_6"),
+            symbol_short!("LST_7"), symbol_short!("LST_8"), symbol_short!("LST_9"),
+            symbol_short!("LST_A"),
+        ];
+
+        client.allowlist_add(&user);
+        for id in ids.iter() {
+            client.register_meter(id, &user);
+        }
+
+        // Get last page (offset 8, limit 5) — only 2 results available
+        let page = client.get_all_meters_paginated(&8_u32, &5_u32);
+        assert_eq!(page.len(), 2);
+        assert_eq!(page.get(0), Some(&ids[8]));
+        assert_eq!(page.get(1), Some(&ids[9]));
+    }
+
+    /// get_all_meters_paginated returns empty vec when offset exceeds total count.
+    #[test]
+    fn test_get_all_meters_paginated_offset_exceeds_count() {
+        let (env, client, _admin) = setup();
+        let user = Address::generate(&env);
+        let ids = [
+            symbol_short!("OOB_1"), symbol_short!("OOB_2"), symbol_short!("OOB_3"),
+        ];
+
+        client.allowlist_add(&user);
+        for id in ids.iter() {
+            client.register_meter(id, &user);
+        }
+
+        // Offset beyond the 3 meters
+        let page = client.get_all_meters_paginated(&5_u32, &10_u32);
+        assert_eq!(page.len(), 0);
+    }
+
+    /// get_all_meters_paginated caps limit at 100 to prevent overruns.
+    #[test]
+    fn test_get_all_meters_paginated_limit_capped_at_100() {
+        let (env, client, _admin) = setup();
+        let user = Address::generate(&env);
+        
+        // Register 20 meters to test the capping behavior
+        let ids = [
+            symbol_short!("CAP_01"), symbol_short!("CAP_02"), symbol_short!("CAP_03"),
+            symbol_short!("CAP_04"), symbol_short!("CAP_05"), symbol_short!("CAP_06"),
+            symbol_short!("CAP_07"), symbol_short!("CAP_08"), symbol_short!("CAP_09"),
+            symbol_short!("CAP_10"), symbol_short!("CAP_11"), symbol_short!("CAP_12"),
+            symbol_short!("CAP_13"), symbol_short!("CAP_14"), symbol_short!("CAP_15"),
+            symbol_short!("CAP_16"), symbol_short!("CAP_17"), symbol_short!("CAP_18"),
+            symbol_short!("CAP_19"), symbol_short!("CAP_20"),
+        ];
+        
+        client.allowlist_add(&user);
+        for id in ids.iter() {
+            client.register_meter(id, &user);
+        }
+
+        // Request with limit 200, should be capped at 100
+        // Since we only have 20 meters, we should get all 20
+        let page = client.get_all_meters_paginated(&0_u32, &200_u32);
+        assert_eq!(page.len(), 20);
+    }
+
+    /// get_all_meters_paginated with offset 0 and large limit gets first page.
+    #[test]
+    fn test_get_all_meters_paginated_offset_zero() {
+        let (env, client, _admin) = setup();
+        let user = Address::generate(&env);
+        let ids = [
+            symbol_short!("OFF0_1"), symbol_short!("OFF0_2"), symbol_short!("OFF0_3"),
+            symbol_short!("OFF0_4"), symbol_short!("OFF0_5"),
+        ];
+
+        client.allowlist_add(&user);
+        for id in ids.iter() {
+            client.register_meter(id, &user);
+        }
+
+        // Get first 5 with offset 0
+        let page = client.get_all_meters_paginated(&0_u32, &10_u32);
+        assert_eq!(page.len(), 5);
+        for (i, meter_id) in page.iter().enumerate() {
+            assert_eq!(meter_id, &ids[i]);
+        }
+    }
+
+    /// get_all_meters_paginated with empty contract returns empty vec.
+    #[test]
+    fn test_get_all_meters_paginated_empty_contract() {
+        let (_env, client, _admin) = setup();
+        let page = client.get_all_meters_paginated(&0_u32, &10_u32);
+        assert_eq!(page.len(), 0);
     }
 
     #[test]
