@@ -12,6 +12,11 @@ export interface MeterData {
   balance: bigint;
 }
 
+const REQUEST_TIMEOUT_MS =
+  typeof window !== "undefined"
+    ? parseInt(process.env.NEXT_PUBLIC_REQUEST_TIMEOUT_MS || "10000")
+    : 10000;
+
 export class ContractClient {
   private server: StellarSdk.SorobanRpc.Server;
   private contractId: string;
@@ -21,6 +26,18 @@ export class ContractClient {
     this.server = new StellarSdk.SorobanRpc.Server(rpcUrl);
     this.contractId = contractId;
     this.networkPassphrase = networkPassphrase;
+  }
+
+  private async withTimeout<T>(
+    promise: Promise<T>,
+    timeoutMs: number = REQUEST_TIMEOUT_MS,
+  ): Promise<T> {
+    return Promise.race([
+      promise,
+      new Promise<T>((_, reject) =>
+        setTimeout(() => reject(new Error(`Request timed out after ${timeoutMs}ms`)), timeoutMs),
+      ),
+    ]);
   }
 
   async query(method: string, args: StellarSdk.xdr.ScVal[]): Promise<StellarSdk.xdr.ScVal> {
@@ -36,18 +53,23 @@ export class ContractClient {
       .setTimeout(30)
       .build();
 
-    const sim = await this.server.simulateTransaction(tx);
+    const sim = await this.withTimeout(this.server.simulateTransaction(tx));
     if (StellarSdk.SorobanRpc.Api.isSimulationError(sim)) {
       throw new Error(sim.error);
     }
-    const retval = (sim as StellarSdk.SorobanRpc.Api.SimulateTransactionSuccessResponse).result?.retval;
+    const retval = (sim as StellarSdk.SorobanRpc.Api.SimulateTransactionSuccessResponse).result
+      ?.retval;
     if (!retval) throw new Error(`No result from ${method}`);
     return retval;
   }
 
-  async invoke(sourceAddress: string, method: string, args: StellarSdk.xdr.ScVal[]): Promise<string> {
+  async invoke(
+    sourceAddress: string,
+    method: string,
+    args: StellarSdk.xdr.ScVal[],
+  ): Promise<string> {
     const contract = new StellarSdk.Contract(this.contractId);
-    const account = await this.server.getAccount(sourceAddress);
+    const account = await this.withTimeout(this.server.getAccount(sourceAddress));
 
     let tx = new StellarSdk.TransactionBuilder(account, {
       fee: "100",
@@ -57,7 +79,7 @@ export class ContractClient {
       .setTimeout(30)
       .build();
 
-    const sim = await this.server.simulateTransaction(tx);
+    const sim = await this.withTimeout(this.server.simulateTransaction(tx));
     if (StellarSdk.SorobanRpc.Api.isSimulationError(sim)) {
       throw new Error(sim.error);
     }
@@ -68,7 +90,7 @@ export class ContractClient {
     const signedXdr = await signTransaction(tx.toXDR());
 
     const signedTx = StellarSdk.TransactionBuilder.fromXDR(signedXdr, this.networkPassphrase);
-    const result = await this.server.sendTransaction(signedTx);
+    const result = await this.withTimeout(this.server.sendTransaction(signedTx));
 
     if (result.status === "ERROR") {
       throw new Error(`Transaction failed: ${result.errorResult}`);
@@ -79,7 +101,7 @@ export class ContractClient {
 
 export const client = new ContractClient(
   process.env.NEXT_PUBLIC_CONTRACT_ID!,
-  process.env.NEXT_PUBLIC_RPC_URL ?? 'https://soroban-testnet.stellar.org',
+  process.env.NEXT_PUBLIC_RPC_URL ?? "https://soroban-testnet.stellar.org",
   process.env.NEXT_PUBLIC_NETWORK_PASSPHRASE ?? StellarSdk.Networks.TESTNET,
 );
 
@@ -87,7 +109,10 @@ export async function fetchMeter(meterId: string): Promise<MeterData> {
   const retval = await client.query("get_meter_full", [
     StellarSdk.nativeToScVal(meterId, { type: "symbol" }),
   ]);
-  const view = StellarSdk.scValToNative(retval) as { meter: Omit<MeterData, "balance">; balance: bigint };
+  const view = StellarSdk.scValToNative(retval) as {
+    meter: Omit<MeterData, "balance">;
+    balance: bigint;
+  };
   return { ...view.meter, balance: view.balance } as MeterData;
 }
 
