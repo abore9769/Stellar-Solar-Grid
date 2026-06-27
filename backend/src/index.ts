@@ -108,6 +108,38 @@ app.use((req: any, _res: any, next: any) => {
   if (!req.timedout) next();
 });
 
+// Rate limiting configuration (driven by env vars)
+const RATE_LIMIT_WINDOW_MS = Number(process.env.RATE_LIMIT_WINDOW_MS ?? 60 * 1000);
+const RATE_LIMIT_MAX = Number(process.env.RATE_LIMIT_MAX ?? 60);
+const PAYMENTS_RATE_LIMIT_MAX = Number(process.env.PAYMENTS_RATE_LIMIT_MAX ?? 10);
+const RATE_LIMIT_MESSAGE = process.env.RATE_LIMIT_MESSAGE ?? 'Too many requests, please try again later.';
+
+const globalLimiter = rateLimit({
+  windowMs: RATE_LIMIT_WINDOW_MS,
+  max: RATE_LIMIT_MAX,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (_req, res) => {
+    // Provide Retry-After in seconds
+    res.setHeader('Retry-After', String(Math.ceil(RATE_LIMIT_WINDOW_MS / 1000)));
+    res.status(429).json({ error: RATE_LIMIT_MESSAGE });
+  },
+});
+
+const paymentsLimiter = rateLimit({
+  windowMs: RATE_LIMIT_WINDOW_MS,
+  max: PAYMENTS_RATE_LIMIT_MAX,
+  standardHeaders: true,
+  legacyHeaders: false,
+  handler: (_req, res) => {
+    res.setHeader('Retry-After', String(Math.ceil(RATE_LIMIT_WINDOW_MS / 1000)));
+    res.status(429).json({ error: RATE_LIMIT_MESSAGE });
+  },
+});
+
+// Apply global limiter to all /api routes
+app.use('/api', globalLimiter);
+
 app.use((req, _res, next) => {
   logger.info({ method: req.method, path: req.path });
   next();
