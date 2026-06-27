@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
 import Navbar from "@/components/Navbar";
 import { useWalletStore } from "@/store/walletStore";
 import { useToast } from "@/components/ToastProvider";
@@ -13,9 +14,7 @@ import {
 type SortField = "date" | "amountXlm" | "plan" | "meterId";
 type SortDir = "asc" | "desc";
 
-const NETWORK = import.meta.env.VITE_NETWORK_PASSPHRASE?.includes("Test")
-  ? "testnet"
-  : "mainnet";
+const NETWORK = import.meta.env.VITE_NETWORK_PASSPHRASE?.includes("Test") ? "testnet" : "mainnet";
 
 const EXPLORER_BASE =
   NETWORK === "testnet"
@@ -27,6 +26,9 @@ const PAGE_SIZE = 10;
 export default function HistoryPage() {
   const { address } = useWalletStore();
   const { showToast } = useToast();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const queryPage = parseInt(searchParams.get("page") || "1");
 
   const [records, setRecords] = useState<PaymentRecord[]>([]);
   const [pagination, setPagination] = useState({ page: 1, pages: 1, total: 0 });
@@ -36,16 +38,20 @@ export default function HistoryPage() {
   const [sortDir, setSortDir] = useState<SortDir>("desc");
   const [exporting, setExporting] = useState(false);
 
+  // Sync page to URL
+  useEffect(() => {
+    if (pagination.page > 1) {
+      router.push(`?page=${pagination.page}`, { scroll: false } as any);
+    } else if (queryPage > 1) {
+      router.push("", { scroll: false } as any);
+    }
+  }, [pagination.page, queryPage, router]);
+
   async function handleExportCsv() {
     if (!address) return;
     setExporting(true);
     try {
-      const data = await getPaymentHistory(
-        address,
-        1,
-        pagination.total || 10000,
-        sortDir
-      );
+      const data = await getPaymentHistory(address, 1, pagination.total || 10000, sortDir);
 
       const header = "Date,Meter ID,Amount (XLM),Plan,Transaction Hash";
       const rows = data.payments.map((r) =>
@@ -55,7 +61,7 @@ export default function HistoryPage() {
           r.amountXlm.toFixed(7),
           r.plan,
           r.txHash || "",
-        ].join(",")
+        ].join(","),
       );
       const csv = [header, ...rows].join("\n");
       const blob = new Blob([csv], { type: "text/csv" });
@@ -94,7 +100,7 @@ export default function HistoryPage() {
           address,
           page,
           PAGE_SIZE,
-          serverSort
+          serverSort,
         );
         setRecords(data.payments);
         setPagination({
@@ -108,12 +114,12 @@ export default function HistoryPage() {
         setLoading(false);
       }
     },
-    [address, sortField, sortDir]
+    [address, sortField, sortDir],
   );
 
   useEffect(() => {
-    fetchHistory(1);
-  }, [fetchHistory]);
+    fetchHistory(queryPage);
+  }, [fetchHistory, queryPage]);
 
   function handleSort(field: SortField) {
     if (field === sortField) {
@@ -145,9 +151,7 @@ export default function HistoryPage() {
     <>
       <Navbar />
       <main className="min-h-screen px-4 py-8 max-w-5xl mx-auto">
-        <h1 className="text-2xl sm:text-3xl font-bold text-solar-yellow mb-1">
-          Payment History
-        </h1>
+        <h1 className="text-2xl sm:text-3xl font-bold text-solar-yellow mb-1">Payment History</h1>
         <p className="text-gray-400 mb-6 text-sm">
           All <code className="text-solar-yellow">make_payment</code> transactions for your wallet.
         </p>
@@ -168,9 +172,7 @@ export default function HistoryPage() {
           <>
             {/* ── Mobile card list (hidden on sm+) ── */}
             <div className="sm:hidden space-y-3">
-              {loading && (
-                <p className="text-center text-gray-500 py-10">Loading…</p>
-              )}
+              {loading && <p className="text-center text-gray-500 py-10">Loading…</p>}
               {!loading && sorted.length === 0 && (
                 <p className="text-center text-gray-500 py-10">No payment records found.</p>
               )}
@@ -186,12 +188,8 @@ export default function HistoryPage() {
                       </span>
                       <PlanBadge plan={r.plan} />
                     </div>
-                    <div className="text-xs text-gray-400">
-                      {new Date(r.date).toLocaleString()}
-                    </div>
-                    <div className="text-xs text-gray-300 font-mono">
-                      Meter: {r.meterId}
-                    </div>
+                    <div className="text-xs text-gray-400">{new Date(r.date).toLocaleString()}</div>
+                    <div className="text-xs text-gray-300 font-mono">Meter: {r.meterId}</div>
                     {r.txHash && (
                       <a
                         href={`${EXPLORER_BASE}/${r.txHash}`}
@@ -207,7 +205,10 @@ export default function HistoryPage() {
             </div>
 
             {/* ── Desktop table (hidden below sm) ── */}
-            <div className="hidden sm:block overflow-x-auto rounded-xl border border-white/10" style={{ WebkitOverflowScrolling: "touch" }}>
+            <div
+              className="hidden sm:block overflow-x-auto rounded-xl border border-white/10"
+              style={{ WebkitOverflowScrolling: "touch" }}
+            >
               <table className="w-full text-sm min-w-[600px]">
                 <thead className="bg-solar-accent border-b border-white/10">
                   <tr>
@@ -332,7 +333,9 @@ function PlanBadge({ plan }: { plan: string }) {
   };
   const cls = styles[plan] ?? "bg-gray-800 text-gray-400 border-gray-700/40";
   return (
-    <span className={`rounded-full border px-2 py-0.5 text-xs font-medium whitespace-nowrap ${cls}`}>
+    <span
+      className={`rounded-full border px-2 py-0.5 text-xs font-medium whitespace-nowrap ${cls}`}
+    >
       {plan}
     </span>
   );
