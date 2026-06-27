@@ -2,6 +2,7 @@ import * as StellarSdk from "@stellar/stellar-sdk";
 import { contractCalls } from "./metrics.js";
 
 const NETWORK = process.env.STELLAR_NETWORK ?? "testnet";
+
 export const NETWORK_PASSPHRASE =
   NETWORK === "mainnet" ? StellarSdk.Networks.PUBLIC : StellarSdk.Networks.TESTNET;
 

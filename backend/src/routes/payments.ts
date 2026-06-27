@@ -1,10 +1,38 @@
 import { Router } from "express";
 import * as StellarSdk from "@stellar/stellar-sdk";
-import { server, CONTRACT_ID, NETWORK_PASSPHRASE } from "../lib/stellar.js";
+import { z } from "zod";
+import { server, CONTRACT_ID, NETWORK_PASSPHRASE, adminInvoke } from "../lib/stellar.js";
 import { logger } from "../lib/logger.js";
 import { asyncHandler } from "../lib/asyncHandler.js";
 
 export const paymentsRouter = Router();
+
+const PaymentSchema = z.object({
+  meterId: z.string().min(1).max(64),
+  amount: z.number().int().positive(),
+  payer: z.string().length(56),
+});
+
+paymentsRouter.post(
+  "/",
+  asyncHandler(async (req, res) => {
+    const parsed = PaymentSchema.safeParse(req.body);
+    if (!parsed.success) {
+      return res.status(400).json({
+        error: "Invalid request",
+        code: "VALIDATION_ERROR",
+        details: parsed.error.flatten(),
+      });
+    }
+    const { meterId, amount, payer } = parsed.data;
+    const hash = await adminInvoke("make_payment", [
+      StellarSdk.nativeToScVal(meterId, { type: "symbol" }),
+      StellarSdk.nativeToScVal(BigInt(amount), { type: "i128" }),
+      StellarSdk.nativeToScVal(payer, { type: "address" }),
+    ]);
+    return res.json({ hash });
+  }),
+);
 
 const HORIZON_URL =
   NETWORK_PASSPHRASE === StellarSdk.Networks.PUBLIC
@@ -42,6 +70,7 @@ paymentsRouter.get(
       Math.max(1, parseInt((req.query.limit as string) ?? "10", 10)),
     );
     const sort = req.query.sort === "asc" ? "asc" : "desc";
+    const days = Math.min(90, Math.max(1, parseInt((req.query.days as string) ?? "30", 10)));
 
     try {
       StellarSdk.StrKey.decodeEd25519PublicKey(address);
@@ -49,19 +78,23 @@ paymentsRouter.get(
       return res.status(400).json({ error: "Invalid Stellar address" });
     }
 
-    const records = await fetchPaymentEvents(address, sort);
-    const total = records.length;
-    const start = (page - 1) * limit;
-    const paginated = records.slice(start, start + limit);
+    try {
+      const records = await fetchPaymentEvents(address, sort, days);
+      const total = records.length;
+      const start = (page - 1) * limit;
+      const paginated = records.slice(start, start + limit);
 
-    return res.json({
-      payments: paginated,
-      pagination: { page, limit, total, pages: Math.ceil(total / limit) },
-    });
-  } catch (err: any) {
-    return res.status(500).json({ error: err.message ?? "Failed to fetch payment history" });
-  }
-});
+      return res.json({
+        payments: paginated,
+        pagination: { page, limit, total, pages: Math.ceil(total / limit) },
+      });
+    } catch (err: any) {
+      console.error("payments route error:", err);
+      if (err?.code === 'RPC_ERROR' || err?.isRpcError) {
+        return res.status(502).json({ error: err.message ?? "RPC request failed", code: "RPC_ERROR" });
+      }
+      return res.status(500).json({ error: err.message ?? "Failed to fetch payment history" });
+    }
   }),
 );
 
@@ -70,45 +103,50 @@ paymentsRouter.get(
 async function fetchPaymentEvents(
   address: string,
   sort: "asc" | "desc",
+  days = 30,
 ): Promise<PaymentRecord[]> {
-  // Query Soroban RPC for contract events
-  // Events follow (EVT_NS, action, subject) pattern; filter on namespace + action
-  const EVT_NS = StellarSdk.xdr.ScVal.scvSymbol("solargrid").toXDR("base64");
-  const ACTION = StellarSdk.xdr.ScVal.scvSymbol("payment").toXDR("base64");
+  // Query Soroban RPC for contract events within the requested day window
+  try {
+    const EVT_NS = StellarSdk.xdr.ScVal.scvSymbol("solargrid").toXDR("base64");
+    const ACTION = StellarSdk.xdr.ScVal.scvSymbol("payment").toXDR("base64");
 
-  const response = await (server as any).getEvents({
-    startLedger: 1,
-    filters: [
-      {
-        type: "contract",
-        contractIds: [CONTRACT_ID],
-        topics: [
-          // topics[0] = EVT_NS ("solargrid"), topics[1] = action ("payment")
-          [EVT_NS, ACTION],
-        ],
-      },
-    ],
-    limit: 1000,
-  });
+    const response = await (server as any).getEvents({
+      startLedger: 1,
+      filters: [
+        {
+          type: "contract",
+          contractIds: [CONTRACT_ID],
+          topics: [
+            [EVT_NS, ACTION],
+          ],
+        },
+      ],
+      limit: 1000,
+    });
 
-  const events: PaymentRecord[] = [];
+    const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
+    const events: PaymentRecord[] = [];
 
-  for (const event of response?.events ?? []) {
-    try {
-      const record = parsePaymentEvent(event, address);
-      if (record) events.push(record);
-    } catch {
-      // skip malformed events
+    for (const event of response?.events ?? []) {
+      try {
+        const record = parsePaymentEvent(event, address);
+        if (record && new Date(record.date).getTime() >= cutoff) events.push(record);
+      } catch {
+        // skip malformed events
+      }
     }
+
+    events.sort((a, b) => {
+      const diff = new Date(a.date).getTime() - new Date(b.date).getTime();
+      return sort === "asc" ? diff : -diff;
+    });
+
+    return events;
+  } catch (err: any) {
+    const rpcErr: any = new Error(err.message ?? "RPC request failed");
+    rpcErr.isRpcError = true;
+    throw rpcErr;
   }
-
-  // Sort by date
-  events.sort((a, b) => {
-    const diff = new Date(a.date).getTime() - new Date(b.date).getTime();
-    return sort === "asc" ? diff : -diff;
-  });
-
-  return events;
 }
 
 function parsePaymentEvent(
@@ -123,19 +161,8 @@ function parsePaymentEvent(
 
   if (topics.length < 3) return null;
 
-  // topics[0] = namespace, topics[1] = action, topics[2] = meter_id (subject)
+  // topics[2] = meter_id (subject)
   const meterVal = topics[2];
-  const payerVal = topics[2];
-  const payer =
-    payerVal.switch().name === "scvAddress"
-      ? StellarSdk.StrKey.encodeEd25519PublicKey(
-          payerVal.address().accountId().ed25519(),
-        )
-      : null;
-
-  if (!payer || payer !== filterAddress) return null;
-
-  const meterVal = topics[1];
   const meterId =
     meterVal.switch().name === "scvSymbol"
       ? meterVal.sym().toString()
@@ -168,7 +195,6 @@ function parsePaymentEvent(
 
   if (!payer || payer !== filterAddress) return null;
 
-  // Ledger close time from event
   const date = event.ledgerClosedAt
     ? new Date(event.ledgerClosedAt).toISOString()
     : new Date().toISOString();
@@ -181,3 +207,6 @@ function parsePaymentEvent(
     plan,
   };
 }
+
+// suppress unused import warning — horizonServer reserved for fallback
+void horizonServer;

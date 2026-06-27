@@ -1,9 +1,15 @@
-import { Request, Response, NextFunction, RequestHandler } from 'express';
+﻿import { Request, Response, NextFunction } from 'express';
 
+/**
+ * Wraps an async Express route handler and forwards any thrown errors
+ * to the next() error middleware, avoiding unhandled promise rejections.
+ */
 export function asyncHandler(
-  fn: (req: Request, res: Response, next: NextFunction) => Promise<any>
-): RequestHandler {
-  return (req, res, next) => fn(req, res, next).catch(next);
+  fn: (req: Request, res: Response, next: NextFunction) => Promise<unknown>
+) {
+  return (req: Request, res: Response, next: NextFunction) => {
+    Promise.resolve(fn(req, res, next)).catch(next);
+  };
 }
 import { NextFunction, Request, RequestHandler, Response } from "express";
 

@@ -1,8 +1,10 @@
 "use client";
 
 import { useEffect, useState, useCallback } from "react";
+import { useSearchParams, useRouter } from "next/navigation";
 import Navbar from "@/components/Navbar";
 import { useWalletStore } from "@/store/walletStore";
+import { useToast } from "@/components/ToastProvider";
 import {
   getPaymentHistory,
   type PaymentRecord,
@@ -12,9 +14,7 @@ import {
 type SortField = "date" | "amountXlm" | "plan" | "meterId";
 type SortDir = "asc" | "desc";
 
-const NETWORK = import.meta.env.VITE_NETWORK_PASSPHRASE?.includes("Test")
-  ? "testnet"
-  : "mainnet";
+const NETWORK = import.meta.env.VITE_NETWORK_PASSPHRASE?.includes("Test") ? "testnet" : "mainnet";
 
 const EXPLORER_BASE =
   NETWORK === "testnet"
@@ -25,6 +25,10 @@ const PAGE_SIZE = 10;
 
 export default function HistoryPage() {
   const { address } = useWalletStore();
+  const { showToast } = useToast();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const queryPage = parseInt(searchParams.get("page") || "1");
 
   const [records, setRecords] = useState<PaymentRecord[]>([]);
   const [pagination, setPagination] = useState({ page: 1, pages: 1, total: 0 });
@@ -32,6 +36,58 @@ export default function HistoryPage() {
   const [error, setError] = useState<string | null>(null);
   const [sortField, setSortField] = useState<SortField>("date");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
+  const [exporting, setExporting] = useState(false);
+
+  // Sync page to URL
+  useEffect(() => {
+    if (pagination.page > 1) {
+      router.push(`?page=${pagination.page}`, { scroll: false } as any);
+    } else if (queryPage > 1) {
+      router.push("", { scroll: false } as any);
+    }
+  }, [pagination.page, queryPage, router]);
+
+  async function handleExportCsv() {
+    if (!address) return;
+    setExporting(true);
+    try {
+      const data = await getPaymentHistory(address, 1, pagination.total || 10000, sortDir);
+
+      const header = "Date,Meter ID,Amount (XLM),Plan,Transaction Hash";
+      const rows = data.payments.map((r) =>
+        [
+          new Date(r.date).toISOString(),
+          r.meterId,
+          r.amountXlm.toFixed(7),
+          r.plan,
+          r.txHash || "",
+        ].join(","),
+      );
+      const csv = [header, ...rows].join("\n");
+      const blob = new Blob([csv], { type: "text/csv" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `payments-${address.slice(0, 8)}-${Date.now()}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
+
+      showToast({
+        variant: "success",
+        title: "Export Successful",
+        description: `Exported ${data.payments.length} records to CSV.`,
+      });
+    } catch (e: any) {
+      setError(e.message ?? "Failed to export history");
+      showToast({
+        variant: "error",
+        title: "Export Failed",
+        description: e.message ?? "Failed to export history",
+      });
+    } finally {
+      setExporting(false);
+    }
+  }
 
   const fetchHistory = useCallback(
     async (page: number) => {
@@ -44,7 +100,7 @@ export default function HistoryPage() {
           address,
           page,
           PAGE_SIZE,
-          serverSort
+          serverSort,
         );
         setRecords(data.payments);
         setPagination({
@@ -58,12 +114,12 @@ export default function HistoryPage() {
         setLoading(false);
       }
     },
-    [address, sortField, sortDir]
+    [address, sortField, sortDir],
   );
 
   useEffect(() => {
-    fetchHistory(1);
-  }, [fetchHistory]);
+    fetchHistory(queryPage);
+  }, [fetchHistory, queryPage]);
 
   function handleSort(field: SortField) {
     if (field === sortField) {
@@ -95,9 +151,7 @@ export default function HistoryPage() {
     <>
       <Navbar />
       <main className="min-h-screen px-4 py-8 max-w-5xl mx-auto">
-        <h1 className="text-2xl sm:text-3xl font-bold text-solar-yellow mb-1">
-          Payment History
-        </h1>
+        <h1 className="text-2xl sm:text-3xl font-bold text-solar-yellow mb-1">Payment History</h1>
         <p className="text-gray-400 mb-6 text-sm">
           All <code className="text-solar-yellow">make_payment</code> transactions for your wallet.
         </p>
@@ -118,9 +172,7 @@ export default function HistoryPage() {
           <>
             {/* ── Mobile card list (hidden on sm+) ── */}
             <div className="sm:hidden space-y-3">
-              {loading && (
-                <p className="text-center text-gray-500 py-10">Loading…</p>
-              )}
+              {loading && <p className="text-center text-gray-500 py-10">Loading…</p>}
               {!loading && sorted.length === 0 && (
                 <p className="text-center text-gray-500 py-10">No payment records found.</p>
               )}
@@ -136,12 +188,8 @@ export default function HistoryPage() {
                       </span>
                       <PlanBadge plan={r.plan} />
                     </div>
-                    <div className="text-xs text-gray-400">
-                      {new Date(r.date).toLocaleString()}
-                    </div>
-                    <div className="text-xs text-gray-300 font-mono">
-                      Meter: {r.meterId}
-                    </div>
+                    <div className="text-xs text-gray-400">{new Date(r.date).toLocaleString()}</div>
+                    <div className="text-xs text-gray-300 font-mono">Meter: {r.meterId}</div>
                     {r.txHash && (
                       <a
                         href={`${EXPLORER_BASE}/${r.txHash}`}
@@ -157,7 +205,10 @@ export default function HistoryPage() {
             </div>
 
             {/* ── Desktop table (hidden below sm) ── */}
-            <div className="hidden sm:block overflow-x-auto rounded-xl border border-white/10" style={{ WebkitOverflowScrolling: "touch" }}>
+            <div
+              className="hidden sm:block overflow-x-auto rounded-xl border border-white/10"
+              style={{ WebkitOverflowScrolling: "touch" }}
+            >
               <table className="w-full text-sm min-w-[600px]">
                 <thead className="bg-solar-accent border-b border-white/10">
                   <tr>
@@ -230,31 +281,40 @@ export default function HistoryPage() {
               </table>
             </div>
 
-            {/* Pagination */}
-            {pagination.pages > 1 && (
-              <div className="mt-6 flex flex-col sm:flex-row items-center justify-between gap-3 text-sm text-gray-400">
-                <span>
-                  {pagination.total} record{pagination.total !== 1 ? "s" : ""} total
-                </span>
-                <div className="flex items-center gap-2">
+            {/* Action Bar (Export CSV & Pagination) */}
+            {sorted.length > 0 && (
+              <div className="mt-6 flex flex-col sm:flex-row items-center justify-between gap-4 text-sm text-gray-400 border-t border-white/5 pt-6">
+                <div>
                   <button
-                    disabled={pagination.page <= 1 || loading}
-                    onClick={() => fetchHistory(pagination.page - 1)}
-                    className="rounded-lg border border-white/10 px-4 py-2 hover:border-solar-yellow hover:text-solar-yellow disabled:opacity-30 disabled:cursor-not-allowed transition"
+                    onClick={handleExportCsv}
+                    disabled={exporting}
+                    className="rounded-lg border border-white/10 px-4 py-2 text-sm text-gray-300 hover:border-solar-yellow hover:text-solar-yellow disabled:opacity-30 disabled:cursor-not-allowed transition"
                   >
-                    ← Prev
-                  </button>
-                  <span className="px-2 text-xs">
-                    {pagination.page} / {pagination.pages}
-                  </span>
-                  <button
-                    disabled={pagination.page >= pagination.pages || loading}
-                    onClick={() => fetchHistory(pagination.page + 1)}
-                    className="rounded-lg border border-white/10 px-4 py-2 hover:border-solar-yellow hover:text-solar-yellow disabled:opacity-30 disabled:cursor-not-allowed transition"
-                  >
-                    Next →
+                    {exporting ? "Exporting..." : "Export CSV"}
                   </button>
                 </div>
+
+                {pagination.pages > 1 && (
+                  <div className="flex items-center gap-2">
+                    <button
+                      disabled={pagination.page <= 1 || loading}
+                      onClick={() => fetchHistory(pagination.page - 1)}
+                      className="rounded-lg border border-white/10 px-4 py-2 hover:border-solar-yellow hover:text-solar-yellow disabled:opacity-30 disabled:cursor-not-allowed transition"
+                    >
+                      ← Prev
+                    </button>
+                    <span className="px-2 text-xs">
+                      {pagination.page} / {pagination.pages}
+                    </span>
+                    <button
+                      disabled={pagination.page >= pagination.pages || loading}
+                      onClick={() => fetchHistory(pagination.page + 1)}
+                      className="rounded-lg border border-white/10 px-4 py-2 hover:border-solar-yellow hover:text-solar-yellow disabled:opacity-30 disabled:cursor-not-allowed transition"
+                    >
+                      Next →
+                    </button>
+                  </div>
+                )}
               </div>
             )}
           </>
@@ -273,7 +333,9 @@ function PlanBadge({ plan }: { plan: string }) {
   };
   const cls = styles[plan] ?? "bg-gray-800 text-gray-400 border-gray-700/40";
   return (
-    <span className={`rounded-full border px-2 py-0.5 text-xs font-medium whitespace-nowrap ${cls}`}>
+    <span
+      className={`rounded-full border px-2 py-0.5 text-xs font-medium whitespace-nowrap ${cls}`}
+    >
       {plan}
     </span>
   );
